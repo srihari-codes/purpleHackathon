@@ -3,3 +3,4 @@
 *.env
 /cctv_raw
 /__pycache__
+*.mp4

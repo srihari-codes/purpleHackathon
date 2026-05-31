@@ -40,7 +40,7 @@ from tracker    import VisitorIdentityManager
 from staff      import StaffBehaviourTracker
 from zones      import get_zones_for_camera, zone_for_point, ENTRY_LINE_NORM
 from entry_exit import EntryExitDetector
-from queue      import QueueTracker
+from billing_queue import QueueTracker
 from gui_server import run_server, SHARED
 
 # ---------------------------------------------------------------------------
@@ -89,12 +89,14 @@ class YOLODetector:
             else:
                 dev = device
             self._model.to(dev)
+            self._resolved_device = dev
             self._use_yolo = True
             logger.info(f"YOLODetector: YOLOv8 loaded on {dev}")
         except Exception as e:
             logger.warning(f"YOLODetector: YOLOv8 unavailable ({e}). "
                            f"Falling back to MOG2 background subtraction.")
             self._use_yolo = False
+            self._resolved_device = "cpu"
             self._bg_sub = {}    # camera_id → MOG2 subtractor
 
     def detect_and_track(
@@ -119,6 +121,8 @@ class YOLODetector:
                 conf=0.35,
                 iou=0.45,
                 verbose=False,
+                device=self._resolved_device,
+                tracker="bytetrack.yaml",
             )
             detections = []
             if results and results[0].boxes is not None:
@@ -369,8 +373,13 @@ class CameraProcessor:
         for track_id, bbox_xyxy, conf in detections:
             seen_track_ids.add(track_id)
 
-            # Extract appearance embedding
-            embedding = self.identity_mgr.extract_embedding(frame_bgr, bbox_xyxy)
+            # Optimization: Only extract embedding for new tracks or periodically (every 15 frames)
+            key = (track_id, self.camera_id)
+            is_active = key in self.identity_mgr._active
+            if not is_active or (self.frame_index % 15 == 0):
+                embedding = self.identity_mgr.extract_embedding(frame_bgr, bbox_xyxy)
+            else:
+                embedding = None
 
             # Resolve visitor identity
             visitor_id, is_new = self.identity_mgr.resolve(
@@ -387,8 +396,11 @@ class CameraProcessor:
             cy = (bbox_xyxy[1] + bbox_xyxy[3]) / 2
             current_zone_obj = zone_for_point(cx, cy, w, h, self.camera_id)
             zone_id = current_zone_obj.zone_id if current_zone_obj else None
+            
+            # Optimization: Only compute black clothing score for new tracks or periodically (every 15 frames)
+            skip_clothing = not (is_new or (self.frame_index % 15 == 0))
             self.staff_tracker.update(visitor_id, frame_bgr, bbox_xyxy,
-                                      self.camera_id, zone_id)
+                                      self.camera_id, zone_id, skip_clothing=skip_clothing)
             is_staff, staff_conf = self.staff_tracker.is_staff(visitor_id)
             state.is_staff  = is_staff
             state.staff_conf = staff_conf
@@ -530,12 +542,16 @@ class CameraProcessor:
         self.frame_index += 1
 
         # Annotate frame
-        queue_depth = self.queue_tracker.current_queue_depth if self.queue_tracker else 0
-        annotated = annotate_frame(
-            frame_bgr, self.camera_id, detections, self.identity_mgr,
-            self.staff_tracker, self.zones, w, h,
-            self.entry_detector, queue_depth,
-        )
+        # Optimization: Only draw and encode if a browser client is connected and rate-limit to every 5th frame
+        if SHARED._frame_queues and (self.frame_index % 5 == 0):
+            queue_depth = self.queue_tracker.current_queue_depth if self.queue_tracker else 0
+            annotated = annotate_frame(
+                frame_bgr, self.camera_id, detections, self.identity_mgr,
+                self.staff_tracker, self.zones, w, h,
+                self.entry_detector, queue_depth,
+            )
+        else:
+            annotated = None
         return annotated
 
 
@@ -545,29 +561,41 @@ class CameraProcessor:
 
 def ocr_timestamp_from_frame(frame_bgr: np.ndarray) -> Optional[datetime]:
     """
-    Attempt to OCR the timestamp watermark from the upper-right corner.
+    Attempt to OCR the timestamp watermark from the frame.
+    Scans all four corners and picks the region with the highest pixel
+    variance (most likely to contain text overlay).
     Returns a UTC-aware datetime or None.
 
     Requires pytesseract and tesseract-ocr installed.
-    Cam3 watermark is blurred — will return None (handled by caller).
     """
     try:
         import pytesseract
         h, w = frame_bgr.shape[:2]
-        # Upper-right 300×60 px region
-        roi = frame_bgr[0:60, w-320:w]
+        # Scan all four corners — DVR hardware stamps vary per vendor
+        rois = {
+            "upper_left":  frame_bgr[0:60,   0:400],
+            "upper_right": frame_bgr[0:60,   w-320:w],
+            "lower_left":  frame_bgr[h-60:h, 0:400],
+            "lower_right": frame_bgr[h-60:h, w-320:w],
+        }
+        # Pick the ROI with highest variance — that's where the text is
+        best_name, roi = max(
+            rois.items(),
+            key=lambda kv: float(cv2.cvtColor(kv[1], cv2.COLOR_BGR2GRAY).std()),
+        )
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
-        text = pytesseract.image_to_string(thresh,
-                                           config="--psm 7 -c tessedit_char_whitelist=0123456789:-T ")
-        text = text.strip()
-        # Try to parse ISO-like format
+        text = pytesseract.image_to_string(
+            thresh,
+            config="--psm 7 -c tessedit_char_whitelist=0123456789:-T ",
+        ).strip()
         for fmt in ("%Y-%m-%dT%H:%M:%S", "%d-%m-%Y %H:%M:%S",
                     "%Y/%m/%d %H:%M:%S", "%H:%M:%S"):
             try:
                 dt = datetime.strptime(text[:19], fmt)
                 if dt.year < 2000:
                     dt = dt.replace(year=2026)
+                logger.debug(f"OCR timestamp from {best_name}: '{text}' → {dt}")
                 return dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
@@ -716,9 +744,18 @@ def run_pipeline(
     logger.info(f"Running with cameras: {active_cams}")
 
     # --- Main loop ---
-    frame_delay = (1.0 / 15.0) / max(speed, 0.01)   # sleep between frames
+    # Use the actual mean FPS of all cameras for the sleep throttle so
+    # speed=1.0 really means "process at footage real-time rate".
+    avg_fps = (
+        sum(p.fps for p in processors.values()) / len(processors)
+        if processors else 15.0
+    )
+    frame_delay = 0.0 if speed <= 0 else ((1.0 / avg_fps) / speed)
     start_wall  = time.time()
     global_frame = 0
+
+    # Track which cameras are still producing frames
+    exhausted_cameras: set = set()
 
     try:
         while True:
@@ -727,8 +764,37 @@ def run_pipeline(
 
             for camera_id, proc in list(processors.items()):
                 ret, frame = proc.cap.read()
+                if ret:
+                    # CPU Bottleneck Optimization: Downscale 1080p frame immediately to 960x540.
+                    # This reduces CPU pixel load by 4x for all subsequent operations (tracking, cropping, color histogram, overlays).
+                    frame = cv2.resize(frame, (960, 540))
                 if not ret:
-                    logger.info(f"{camera_id}: video ended at frame {proc.frame_index}")
+                    if camera_id not in exhausted_cameras:
+                        # --- Bug 3 fix: flush dangling zone dwells on clip end ---
+                        exhausted_cameras.add(camera_id)
+                        wall_time = start_wall + proc.frame_index / proc.fps
+                        ts = make_timestamp(proc.start_time, proc.frame_index, proc.fps)
+                        logger.info(
+                            f"{camera_id}: video ended at frame {proc.frame_index} "
+                            f"— flushing {len(proc._visitor_zones)} active visitor zones"
+                        )
+                        for visitor_id, zone_id in list(proc._visitor_zones.items()):
+                            if zone_id is None:
+                                continue
+                            dwell_ms = proc.dwell_tracker.exit(visitor_id, zone_id, wall_time)
+                            if dwell_ms is None:
+                                dwell_ms = 0
+                            zone_obj = next(
+                                (z for z in proc.zones if z.zone_id == zone_id), None
+                            )
+                            sku = zone_obj.sku_zone if zone_obj else zone_id
+                            is_staff, conf = staff_tracker.is_staff(visitor_id)
+                            seq = identity_mgr.get_session_seq(visitor_id)
+                            proc.emitter.emit_zone_exit(
+                                visitor_id, camera_id, ts, zone_id, sku,
+                                dwell_ms, is_staff, conf, seq
+                            )
+                        proc._visitor_zones.clear()
                     continue
                 any_frames = True
 
@@ -751,7 +817,7 @@ def run_pipeline(
 
             # Update GUI metrics
             staff_ids = {
-                vid for vid in identity_mgr._active.values()
+                vid.visitor_id for vid in identity_mgr._active.values()
                 if staff_tracker.is_staff(vid.visitor_id)[0]
             }
             queue_d = max(

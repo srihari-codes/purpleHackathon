@@ -1,18 +1,16 @@
-version: "3.9"
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Store Intelligence — Detection Layer
 #
 # Usage (full pipeline):
-#   docker compose run --rm pipeline
+#   docker compose up pipeline
 #
-# Usage (calibrate zones first):
-#   docker compose run --rm --service-ports calibrate
-#   # then open http://localhost:8081 and draw zones
-#   # save zones_override.json to ./pipeline/
+# Point at real footage (overrides the default):
+#   CLIPS_DIR=/home/hari/workspace/purpleHackathon/cctv_raw/CCTV\ Footage \
+#     docker compose up pipeline
 #
 # Environment overrides (pass via -e or .env file):
-#   STORE_ID, CLIPS_DIR, OUTPUT, GUI_PORT, SPEED, LOG_LEVEL, CAM3_START_ISO
+#   STORE_ID, CLIPS_DIR, OUTPUT, GUI_PORT, SPEED, LOG_LEVEL, CAM3_START_ISO,
+#   POS_ABANDON_WINDOW_SEC (45 for short clips, 300 for 20-min production)
 # ─────────────────────────────────────────────────────────────────────────────
 
 x-pipeline-base: &pipeline-base
@@ -20,20 +18,24 @@ x-pipeline-base: &pipeline-base
     context: .
     dockerfile: Dockerfile.pipeline
   volumes:
-    # Mount your clips directory here (read-only)
-    - ${CLIPS_DIR:-./data/clips}:/data/clips:ro
-    # Output events.jsonl and any other artefacts
+    # Real footage — override CLIPS_DIR env to change this path
+    - ${CLIPS_DIR:-../cctv_raw/CCTV Footage}:/data/clips:ro
+    # Output: events.jsonl written to ./data/
     - ${DATA_DIR:-./data}:/data
-    # Allow hot-reloading pipeline source during development
+    # Hot-reload pipeline source during development
     - ./pipeline:/app/pipeline:ro
   environment:
-    STORE_ID:      ${STORE_ID:-STORE_BLR_002}
-    CLIPS_DIR:     /data/clips
-    OUTPUT:        /data/events.jsonl
-    GUI_PORT:      ${GUI_PORT:-8080}
-    SPEED:         ${SPEED:-1.0}
-    LOG_LEVEL:     ${LOG_LEVEL:-INFO}
+    STORE_ID: ${STORE_ID:-STORE_BLR_002}
+    CLIPS_DIR: /data/clips
+    OUTPUT: /data/events.jsonl
+    GUI_PORT: ${GUI_PORT:-8080}
+    SPEED: ${SPEED:-0} # 0 = max speed; 1.0 = real-time
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    PYTHONUNBUFFERED: "1"
     CAM3_START_ISO: ${CAM3_START_ISO:-}
+    # Billing queue abandon window (seconds).
+    # 45s for 2-min test clips; set to 300 for 20-min production clips.
+    POS_ABANDON_WINDOW_SEC: ${POS_ABANDON_WINDOW_SEC:-45}
     # CUDA device visibility — set to "" to force CPU
     NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
     NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
@@ -45,17 +47,15 @@ services:
     container_name: store_detection_pipeline
     ports:
       - "${GUI_PORT:-8080}:8080"
-    # GPU support — requires nvidia-container-toolkit on the host.
-    # If no GPU is available, remove the `deploy` block; pipeline falls back to CPU.
+    restart: "no"
+    command: [] # uses Dockerfile ENTRYPOINT (run.sh)
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: "no"
-    command: []   # uses Dockerfile ENTRYPOINT (run.sh)
+              count: all
+              capabilities: [ gpu ]
 
   # ── Zone calibration tool (run once to draw zone polygons) ───────────────
   calibrate:
@@ -63,13 +63,5 @@ services:
     container_name: store_zone_calibrator
     ports:
       - "8081:8081"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 0
-              capabilities: [gpu]
     restart: "no"
-    entrypoint: ["python3", "/app/pipeline/calibrate_zones.py",
-                 "--clips_dir", "/data/clips", "--port", "8081"]
+    entrypoint: [ "python3", "/app/pipeline/calibrate_zones.py", "--clips_dir", "/data/clips", "--port", "8081" ]

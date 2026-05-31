@@ -1,5 +1,5 @@
 """
-queue.py — Billing queue detection for Camera 5.
+billing_queue.py — Billing queue detection for Camera 5.
 
 Logic:
   - Define a billing ROI (from zones.py ZONE_BILLING_QUEUE polygon).
@@ -26,8 +26,12 @@ logger = logging.getLogger(__name__)
 MIN_QUEUE_DWELL_SEC = 5.0
 
 # How long (seconds) to wait after billing zone exit before emitting
-# a candidate abandon (POS correlation window)
-POS_CORRELATION_WINDOW_SEC = 300.0   # 5 minutes
+# a candidate abandon (POS correlation window).
+# NOTE: for 20-min production clips set this to 300.0 (5 min).
+# For the current 2-min test clips 45s ensures events actually fire.
+POS_CORRELATION_WINDOW_SEC = float(
+    __import__('os').environ.get('POS_ABANDON_WINDOW_SEC', '45')
+)
 
 
 @dataclass

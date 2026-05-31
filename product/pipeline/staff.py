@@ -56,28 +56,39 @@ def compute_black_ratio(crop_bgr: np.ndarray) -> float:
 def black_clothing_score(frame_bgr: np.ndarray,
                          bbox_xyxy: Tuple[int, int, int, int]) -> float:
     """
-    Split the bounding box into upper body (top 50%) and lower body (bottom 50%).
-    Score = average of black ratio across both halves.
-    Both halves must independently show black for a high score.
+    Uses a robust 5-zone body sampling technique (chest, abdomen, upper legs, left arm, right arm)
+    to determine the strength of the black uniform signal, ignoring the face and shoes.
+    Returns a score between 0.0 and 1.0 based on how many zones are 'black'.
     """
     if frame_bgr is None:
         return 0.0
     x1, y1, x2, y2 = [int(v) for v in bbox_xyxy]
-    h, w = frame_bgr.shape[:2]
+    H, W = frame_bgr.shape[:2]
     x1, y1 = max(0, x1), max(0, y1)
-    x2, y2 = min(w, x2), min(h, y2)
-    if x2 <= x1 or y2 <= y1:
+    x2, y2 = min(W, x2), min(H, y2)
+    ph = y2 - y1
+    pw = x2 - x1
+    if pw < 10 or ph < 20:
         return 0.0
 
-    mid_y = (y1 + y2) // 2
-    upper_crop = frame_bgr[y1:mid_y, x1:x2]
-    lower_crop = frame_bgr[mid_y:y2, x1:x2]
-
-    upper_ratio = compute_black_ratio(upper_crop)
-    lower_ratio = compute_black_ratio(lower_crop)
-
-    # Both halves need to be dark; penalise if only one is
-    score = min(upper_ratio, lower_ratio) * 0.6 + (upper_ratio + lower_ratio) / 2 * 0.4
+    # Define 5 body zones specifically targeting clothing (ignoring head and shoes)
+    zones = [
+        frame_bgr[y1+int(ph*0.20):y1+int(ph*0.40), x1:x2],                          # chest
+        frame_bgr[y1+int(ph*0.40):y1+int(ph*0.60), x1:x2],                          # abdomen
+        frame_bgr[y1+int(ph*0.60):y1+int(ph*0.80), x1:x2],                          # upper legs
+        frame_bgr[y1+int(ph*0.25):y1+int(ph*0.75), x1:x1+int(pw*0.35)],             # left side/arm
+        frame_bgr[y1+int(ph*0.25):y1+int(ph*0.75), x1+int(pw*0.65):x2],             # right side/arm
+    ]
+    
+    # Calculate black ratio for each zone
+    zone_ratios = [compute_black_ratio(z) for z in zones]
+    
+    # A zone is "dark" if >= 45% of its pixels match the black HSV threshold
+    dark_votes = sum(1 for r in zone_ratios if r >= 0.45)
+    
+    # Map votes to a continuous confidence score between 0.0 and 1.0
+    score = dark_votes / 5.0
+    
     return float(np.clip(score, 0.0, 1.0))
 
 
@@ -110,14 +121,16 @@ class StaffBehaviourTracker:
 
     def update(self, visitor_id: str, frame_bgr: np.ndarray,
                bbox_xyxy: Tuple[int, int, int, int],
-               camera_id: str, zone_id: Optional[str]):
+               camera_id: str, zone_id: Optional[str],
+               skip_clothing: bool = False):
         self._frame_count[visitor_id] += 1
         self._cameras_seen[visitor_id].add(camera_id)
         if zone_id:
             self._zones_visited[visitor_id].add(zone_id)
 
-        bs = black_clothing_score(frame_bgr, bbox_xyxy)
-        self._black_scores[visitor_id].append(bs)
+        if not skip_clothing:
+            bs = black_clothing_score(frame_bgr, bbox_xyxy)
+            self._black_scores[visitor_id].append(bs)
         self._cache_dirty[visitor_id] = True
 
     def is_staff(self, visitor_id: str) -> Tuple[bool, float]:
@@ -150,12 +163,13 @@ class StaffBehaviourTracker:
         cam_diversity = min((n_cams - 1) / 3.0, 1.0) if n_cams > 1 else 0.0
 
         # --- Composite score ---
-        # Black clothing is the primary signal; rest are supporting
+        # Black clothing is the PRIMARY and MOST RELIABLE signal (80% weight)
+        # Behavioural patterns provide secondary confirmation (20% weight)
         composite = (
-            black_p75      * 0.50 +
-            presence_score * 0.25 +
-            zone_diversity * 0.15 +
-            cam_diversity  * 0.10
+            black_p75      * 0.80 +
+            presence_score * 0.10 +
+            zone_diversity * 0.05 +
+            cam_diversity  * 0.05
         )
 
         # Confidence: how many frames we have
