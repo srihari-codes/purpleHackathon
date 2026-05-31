@@ -30,14 +30,14 @@ logger = logging.getLogger(__name__)
 
 class EntryExitDetector:
     """
-    Per-camera entry/exit detector using virtual line crossing.
+    Per-camera entry/exit detector using a virtual line segment crossing.
+    Supports diagonal and arbitrary 2-point line segments.
 
     Args:
         camera_id:      which camera this instance handles
-        line_y_norm:    normalised y position of entry threshold line (0–1)
-        line_x_start:   normalised x start of line
-        line_x_end:     normalised x end of line
-        inside_is:      "below" (higher y = inside) or "above"
+        p1:             [x1, y1] normalized start coordinate of the line segment
+        p2:             [x2, y2] normalized end coordinate of the line segment
+        inside_is:      "below" or "above"
         min_cross_frames: how many consecutive frames on new side before
                           we accept a crossing (debounce)
     """
@@ -45,6 +45,8 @@ class EntryExitDetector:
     def __init__(
         self,
         camera_id:        str   = "CAM_ENTRY_03",
+        p1:               list  = None,
+        p2:               list  = None,
         line_y_norm:      float = 0.50,
         line_x_start:     float = 0.10,
         line_x_end:       float = 0.90,
@@ -52,13 +54,12 @@ class EntryExitDetector:
         min_cross_frames: int   = 3,
     ):
         self.camera_id        = camera_id
-        self.line_y_norm      = line_y_norm
-        self.line_x_start     = line_x_start
-        self.line_x_end       = line_x_end
+        self.p1               = p1 if p1 is not None else [line_x_start, line_y_norm]
+        self.p2               = p2 if p2 is not None else [line_x_end, line_y_norm]
         self.inside_is        = inside_is   # "below" or "above"
         self.min_cross_frames = min_cross_frames
 
-        # track_id → deque of last N side-of-line values ("inside" / "outside")
+        # track_id → deque of last N side-of-line values
         self._track_history: Dict[int, deque] = defaultdict(lambda: deque(maxlen=10))
         # track_id → last committed side
         self._committed_side: Dict[int, str] = {}
@@ -69,14 +70,29 @@ class EntryExitDetector:
 
     def _side(self, cy_norm: float, cx_norm: float) -> Optional[str]:
         """
-        Return "inside", "outside", or None if centroid is outside line x-range.
+        Return "inside", "outside", or None if centroid is outside the line segment span.
         """
-        if not (self.line_x_start <= cx_norm <= self.line_x_end):
+        x1, y1 = self.p1
+        x2, y2 = self.p2
+        dx = x2 - x1
+        dy = y2 - y1
+        len_sq = dx*dx + dy*dy
+        if len_sq == 0:
             return None
+
+        # Project point onto the line segment: parameter t
+        t = ((cx_norm - x1)*dx + (cy_norm - y1)*dy) / len_sq
+        # Add a 5% buffer on the ends for tracking robustness
+        if not (-0.05 <= t <= 1.05):
+            return None
+
+        # Signed 2D cross product of vector P1P2 and P1P
+        d = dx * (cy_norm - y1) - dy * (cx_norm - x1)
+
         if self.inside_is == "below":
-            return "inside" if cy_norm > self.line_y_norm else "outside"
+            return "inside" if d > 0 else "outside"
         else:
-            return "inside" if cy_norm < self.line_y_norm else "outside"
+            return "inside" if d < 0 else "outside"
 
     def update(
         self,
@@ -135,8 +151,9 @@ class EntryExitDetector:
         self._track_history.pop(track_id, None)
 
     def get_line_pixels(self, frame_w: int, frame_h: int):
-        """Return (x1, y, x2, y) pixel coords of the line for drawing."""
-        y  = int(self.line_y_norm   * frame_h)
-        x1 = int(self.line_x_start  * frame_w)
-        x2 = int(self.line_x_end    * frame_w)
-        return x1, y, x2, y
+        """Return (x1, y1, x2, y2) pixel coords of the line for drawing."""
+        x1 = int(self.p1[0] * frame_w)
+        y1 = int(self.p1[1] * frame_h)
+        x2 = int(self.p2[0] * frame_w)
+        y2 = int(self.p2[1] * frame_h)
+        return x1, y1, x2, y2

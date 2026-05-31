@@ -238,7 +238,7 @@ class VisitorIdentityManager:
                 state.embedding = embedding
             return state.visitor_id, False
 
-        # 2. New track → try to match against lost tracks
+        # 2. New track → try to match against lost tracks (Sequential transition)
         matched_vid = self._match_lost(camera_id, bbox_xyxy, embedding, wall_time)
 
         if matched_vid is not None:
@@ -254,6 +254,36 @@ class VisitorIdentityManager:
             self._active[key] = lost_state
             logger.debug(f"Re-associated track {track_id}@{camera_id} → {matched_vid}")
             return matched_vid, False
+
+        # 2.5. Try to match against ACTIVE tracks in overlapping cameras (Simultaneous visibility)
+        if embedding is not None:
+            best_sim = 0.0
+            for existing_key, existing_state in self._active.items():
+                active_cam = existing_key[1]
+                if active_cam == camera_id:
+                    continue
+                # Only check if the cameras are adjacent/overlapping
+                if camera_id in CAMERA_ADJACENCY.get(active_cam, set()) or active_cam in CAMERA_ADJACENCY.get(camera_id, set()):
+                    sim = cosine_similarity(existing_state.embedding, embedding)
+                    # We require a slightly higher threshold (0.70) for active-overlap to prevent merging people passing each other
+                    if sim > best_sim and sim >= EMBEDDING_SIM_THRESHOLD + 0.05:
+                        best_sim = sim
+                        matched_vid = existing_state.visitor_id
+
+            if matched_vid is not None:
+                # Share the visitor_id but create a new TrackState for this specific camera view
+                state = TrackState(
+                    visitor_id=matched_vid,
+                    track_id=track_id,
+                    camera_id=camera_id,
+                    bbox_xyxy=bbox_xyxy,
+                    embedding=embedding,
+                    last_seen=wall_time,
+                    session_start=wall_time, # Share same timeline ideally, but wall_time is fine
+                )
+                self._active[key] = state
+                logger.debug(f"Overlapping camera match {track_id}@{camera_id} → {matched_vid}")
+                return matched_vid, False
 
         # 3. Truly new visitor
         visitor_id = "VIS_" + uuid.uuid4().hex[:6]
@@ -369,7 +399,7 @@ class VisitorIdentityManager:
 
     @property
     def active_count(self) -> int:
-        return len(self._active)
+        return len({state.visitor_id for state in self._active.values()})
 
     @property
     def lost_count(self) -> int:

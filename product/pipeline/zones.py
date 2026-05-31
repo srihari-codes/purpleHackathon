@@ -236,3 +236,32 @@ def zone_for_point(px: float, py: float, frame_w: int, frame_h: int,
         if zone.contains_point(px, py, frame_w, frame_h):
             return zone
     return None
+
+
+def get_entry_line_for_camera(camera_id: str) -> dict:
+    """Return entry/exit line config for camera. Loads overrides if present."""
+    override_path = os.path.join(os.path.dirname(__file__), "zones_override.json")
+    if os.path.exists(override_path):
+        try:
+            with open(override_path) as f:
+                overrides = json.load(f)
+            if "entry_line_norm" in overrides and camera_id in overrides["entry_line_norm"]:
+                val = overrides["entry_line_norm"][camera_id]
+                if isinstance(val, list) and len(val) == 2:
+                    return {
+                        "p1": val[0],
+                        "p2": val[1],
+                        "inside_is": "below"
+                    }
+                elif isinstance(val, dict):
+                    return val
+        except Exception:
+            pass
+            
+    # Default to ENTRY_LINE_NORM config
+    cfg = ENTRY_LINE_NORM.get(camera_id, {})
+    return {
+        "p1": [cfg.get("line_x_start", 0.10), cfg.get("line_y", 0.50)],
+        "p2": [cfg.get("line_x_end", 0.90), cfg.get("line_y", 0.50)],
+        "inside_is": cfg.get("inside_is", "below")
+    }

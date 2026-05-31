@@ -53,12 +53,12 @@ class SharedState:
         self._loop = loop
 
     # Called from pipeline (sync) thread --------------------------------
-    def push_frame(self, camera_id: str, jpeg_bytes: bytes):
+    def push_frame(self, camera_id: str, jpeg_bytes: bytes, ts: str = ""):
         with self.lock:
             self.latest_frames[camera_id] = jpeg_bytes
         if self._loop and not self._loop.is_closed():
             asyncio.run_coroutine_threadsafe(
-                self._broadcast_frame(camera_id, jpeg_bytes), self._loop
+                self._broadcast_frame(camera_id, jpeg_bytes, ts), self._loop
             )
 
     def push_event(self, event_dict: dict):
@@ -84,9 +84,9 @@ class SharedState:
             self.metrics["cameras_active"]  = cameras_active
 
     # Async broadcast helpers -------------------------------------------
-    async def _broadcast_frame(self, camera_id: str, jpeg_bytes: bytes):
+    async def _broadcast_frame(self, camera_id: str, jpeg_bytes: bytes, ts: str = ""):
         b64 = base64.b64encode(jpeg_bytes).decode()
-        msg = json.dumps({"camera_id": camera_id, "frame": b64})
+        msg = json.dumps({"camera_id": camera_id, "frame": b64, "timestamp": ts})
         dead = set()
         for q in list(self._frame_queues.values()):
             try:
@@ -192,7 +192,7 @@ const camsDiv = document.getElementById("cams");
 CAMERAS.forEach(cid => {
   const panel = document.createElement("div");
   panel.className = "cam-panel";
-  panel.innerHTML = `<div class="cam-label">${cid}</div><img id="img-${cid}" src="" alt="${cid}">`;
+  panel.innerHTML = `<div class="cam-label">${cid} <span id="ts-${cid}" style="float:right; color:#58a6ff; font-weight:bold;"></span></div><img id="img-${cid}" src="" alt="${cid}">`;
   camsDiv.appendChild(panel);
   camImgs[cid] = document.getElementById("img-"+cid);
 });
@@ -202,7 +202,13 @@ const wsf = new WebSocket(`ws://${location.host}/ws/frames`);
 wsf.onmessage = e => {
   const d = JSON.parse(e.data);
   const img = camImgs[d.camera_id];
-  if (img) img.src = "data:image/jpeg;base64," + d.frame;
+  if (img) {
+      img.src = "data:image/jpeg;base64," + d.frame;
+      if (d.timestamp) {
+          const tsSpan = document.getElementById("ts-" + d.camera_id);
+          if (tsSpan) tsSpan.textContent = d.timestamp;
+      }
+  }
 };
 wsf.onopen = () => { document.getElementById("status").textContent = "frames: connected"; };
 wsf.onclose= () => { document.getElementById("status").textContent = "frames: disconnected"; };

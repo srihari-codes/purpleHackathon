@@ -38,7 +38,7 @@ import numpy as np
 from events     import EventEmitter, make_timestamp
 from tracker    import VisitorIdentityManager
 from staff      import StaffBehaviourTracker
-from zones      import get_zones_for_camera, zone_for_point, ENTRY_LINE_NORM
+from zones      import get_zones_for_camera, zone_for_point, ENTRY_LINE_NORM, get_entry_line_for_camera
 from entry_exit import EntryExitDetector
 from billing_queue import QueueTracker
 from gui_server import run_server, SHARED
@@ -324,12 +324,11 @@ class CameraProcessor:
         self.entry_detector: Optional[EntryExitDetector] = None
         self.queue_tracker:  Optional[QueueTracker]      = None
         if camera_id == "CAM_ENTRY_03":
-            cfg = ENTRY_LINE_NORM.get("CAM_ENTRY_03", {})
+            cfg = get_entry_line_for_camera("CAM_ENTRY_03")
             self.entry_detector = EntryExitDetector(
                 camera_id=camera_id,
-                line_y_norm=cfg.get("line_y", 0.50),
-                line_x_start=cfg.get("line_x_start", 0.10),
-                line_x_end=cfg.get("line_x_end", 0.90),
+                p1=cfg.get("p1"),
+                p2=cfg.get("p2"),
                 inside_is=cfg.get("inside_is", "below"),
             )
         if camera_id == "CAM_BILLING_05":
@@ -356,9 +355,9 @@ class CameraProcessor:
         if self.cap:
             self.cap.release()
 
-    def process_frame(self, frame_bgr: np.ndarray, wall_time: float) -> Optional[np.ndarray]:
+    def process_frame(self, frame_bgr: np.ndarray, wall_time: float) -> Tuple[Optional[np.ndarray], str]:
         """
-        Process one frame. Returns annotated frame (for GUI) or None on error.
+        Process one frame. Returns (annotated frame, ISO timestamp string).
         """
         h, w = frame_bgr.shape[:2]
         ts   = make_timestamp(self.start_time, self.frame_index, self.fps)
@@ -552,7 +551,7 @@ class CameraProcessor:
             )
         else:
             annotated = None
-        return annotated
+        return annotated, ts
 
 
 # ---------------------------------------------------------------------------
@@ -562,45 +561,83 @@ class CameraProcessor:
 def ocr_timestamp_from_frame(frame_bgr: np.ndarray) -> Optional[datetime]:
     """
     Attempt to OCR the timestamp watermark from the frame.
-    Scans all four corners and picks the region with the highest pixel
-    variance (most likely to contain text overlay).
+    Scans all four corners with a robust multi-threshold and prioritized ROI approach.
     Returns a UTC-aware datetime or None.
-
-    Requires pytesseract and tesseract-ocr installed.
     """
     try:
         import pytesseract
+        import re
+        
         h, w = frame_bgr.shape[:2]
-        # Scan all four corners — DVR hardware stamps vary per vendor
-        rois = {
-            "upper_left":  frame_bgr[0:60,   0:400],
-            "upper_right": frame_bgr[0:60,   w-320:w],
-            "lower_left":  frame_bgr[h-60:h, 0:400],
-            "lower_right": frame_bgr[h-60:h, w-320:w],
-        }
-        # Pick the ROI with highest variance — that's where the text is
-        best_name, roi = max(
-            rois.items(),
-            key=lambda kv: float(cv2.cvtColor(kv[1], cv2.COLOR_BGR2GRAY).std()),
-        )
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
-        text = pytesseract.image_to_string(
-            thresh,
-            config="--psm 7 -c tessedit_char_whitelist=0123456789:-T ",
-        ).strip()
-        for fmt in ("%Y-%m-%dT%H:%M:%S", "%d-%m-%Y %H:%M:%S",
-                    "%Y/%m/%d %H:%M:%S", "%H:%M:%S"):
-            try:
-                dt = datetime.strptime(text[:19], fmt)
-                if dt.year < 2000:
-                    dt = dt.replace(year=2026)
-                logger.debug(f"OCR timestamp from {best_name}: '{text}' → {dt}")
-                return dt.replace(tzinfo=timezone.utc)
-            except ValueError:
-                continue
-    except Exception:
-        pass
+        
+        # Prioritized ROIs (upper_right is highly likely for our store camera format)
+        rois = [
+            ("upper_right", frame_bgr[0:150, w-600:w]),
+            ("upper_left",  frame_bgr[0:150, 0:600]),
+            ("lower_right", frame_bgr[h-150:h, w-600:w]),
+            ("lower_left",  frame_bgr[h-150:h, 0:600]),
+        ]
+        
+        def parse_dt(text):
+            # Correct common OCR character substitutions
+            text = text.replace("o", "0").replace("O", "0")
+            text = text.replace("I", "1").replace("l", "1").replace("S", "5")
+            cleaned = re.sub(r'[^0-9\s:/|-]', '', text).strip()
+            
+            # Match DD/MM/YYYY HH:MM:SS
+            pattern = r'\b\d{2}[/|-]\d{2}[/|-]\d{4}\s+\d{2}:\d{2}:\d{2}\b'
+            for match in re.findall(pattern, cleaned):
+                for fmt in ("%d/%m/%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S",
+                            "%d-%m-%Y %H:%M:%S", "%m-%d-%Y %H:%M:%S"):
+                    try:
+                        dt = datetime.strptime(match, fmt)
+                        if dt.year < 2000:
+                            dt = dt.replace(year=2026)
+                        if 2020 <= dt.year <= 2030:
+                            return dt.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        continue
+            
+            # Match DD/MM/YYYYHH:MM:SS (no space)
+            pattern_nospace = r'\b\d{2}[/|-]\d{2}[/|-]\d{4}\d{2}:\d{2}:\d{2}\b'
+            for match in re.findall(pattern_nospace, cleaned):
+                match_with_space = match[:10] + " " + match[10:]
+                for fmt in ("%d/%m/%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S",
+                            "%d-%m-%Y %H:%M:%S", "%m-%d-%Y %H:%M:%S"):
+                    try:
+                        dt = datetime.strptime(match_with_space, fmt)
+                        if dt.year < 2000:
+                            dt = dt.replace(year=2026)
+                        if 2020 <= dt.year <= 2030:
+                            return dt.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        continue
+            return None
+
+        thresholds = [200, 160, 120, 220, 140]
+        for name, roi in rois:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            # Try multiple thresholds to isolate text
+            for thresh_val in thresholds:
+                _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
+                text = pytesseract.image_to_string(
+                    thresh,
+                    config="--psm 6 -c tessedit_char_whitelist=0123456789:-T/ ",
+                ).strip()
+                dt = parse_dt(text)
+                if dt:
+                    logger.debug(f"Successfully OCR'd timestamp from {name} using thresh={thresh_val}: '{text}' → {dt.isoformat()}")
+                    return dt
+            # Fallback: try without whitelist
+            for thresh_val in thresholds:
+                _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
+                text = pytesseract.image_to_string(thresh, config="--psm 6").strip()
+                dt = parse_dt(text)
+                if dt:
+                    logger.debug(f"Successfully OCR'd timestamp (no whitelist) from {name} using thresh={thresh_val}: '{text}' → {dt.isoformat()}")
+                    return dt
+    except Exception as e:
+        logger.warning(f"OCR timestamp error: {e}")
     return None
 
 
@@ -633,14 +670,25 @@ def infer_camera_start_time(
     For cameras where OCR fails (e.g. Cam3 blur), infer from others.
     Assumes all cameras are synchronised.
     """
+    from collections import Counter
     start_times = {}
-    fallback_dt = datetime(2026, 3, 3, 9, 0, 0, tzinfo=timezone.utc)
+    fallback_dt = datetime(2026, 4, 10, 20, 10, 0, tzinfo=timezone.utc)
 
+    # 1. OCR each camera and collect file modification dates
+    max_valid_date = None
     for cam_num in cam_nums:
         path = find_video_file(clips_dir, cam_num)
         if not path:
             continue
         camera_id = CAMERA_MAP.get(cam_num)
+        
+        # Get video file modification date
+        if os.path.exists(path):
+            mtime = os.path.getmtime(path)
+            mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+            if max_valid_date is None or mtime_dt > max_valid_date:
+                max_valid_date = mtime_dt
+
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
             cap.release()
@@ -652,17 +700,58 @@ def infer_camera_start_time(
         dt = ocr_timestamp_from_frame(frame)
         if dt:
             start_times[camera_id] = dt
-            logger.info(f"OCR start time {camera_id}: {dt.isoformat()}")
+            logger.info(f"Raw OCR start time for {camera_id}: {dt.isoformat()}")
 
-    # Fill missing cameras with the first successfully OCR'd time
-    reference_dt = next(iter(start_times.values()), fallback_dt)
+    if max_valid_date:
+        logger.info(f"Max valid date based on file mtime: {max_valid_date.date().isoformat()}")
+    else:
+        max_valid_date = datetime.now(timezone.utc)
+
+    # 2. Consensus Date Extraction (only using dates <= max_valid_date.date())
+    valid_dates = []
+    for camera_id, dt in start_times.items():
+        if dt.date() <= max_valid_date.date():
+            valid_dates.append(dt.date())
+        else:
+            logger.warning(f"Discarding impossible future date from consensus for {camera_id}: {dt.date().isoformat()}")
+            
+    if valid_dates:
+        consensus_date = Counter(valid_dates).most_common(1)[0][0]
+    else:
+        consensus_date = fallback_dt.date()
+        
+    logger.info(f"Consensus Date: {consensus_date.isoformat()}")
+    
+    # 3. Apply consensus date & infer missing
+    final_start_times = {}
+    
+    # Find a good reference time for missing cameras
+    reference_dt = None
+    for camera_id in ["CAM_FLOOR_02", "CAM_FLOOR_01", "CAM_BILLING_05", "CAM_GODOWN_04"]:
+        if camera_id in start_times:
+            t = start_times[camera_id].time()
+            reference_dt = datetime.combine(consensus_date, t, tzinfo=timezone.utc)
+            break
+    if not reference_dt:
+        if start_times:
+            reference_dt = datetime.combine(consensus_date, list(start_times.values())[0].time(), tzinfo=timezone.utc)
+        else:
+            reference_dt = fallback_dt
+            
     for cam_num in cam_nums:
         camera_id = CAMERA_MAP.get(cam_num)
-        if camera_id and camera_id not in start_times:
-            start_times[camera_id] = reference_dt
-            logger.info(f"Inferred start time {camera_id}: {reference_dt.isoformat()} (synced)")
-
-    return start_times
+        if not camera_id:
+            continue
+        if camera_id in start_times:
+            t = start_times[camera_id].time()
+            corrected_dt = datetime.combine(consensus_date, t, tzinfo=timezone.utc)
+            final_start_times[camera_id] = corrected_dt
+            logger.info(f"Final start time for {camera_id}: {corrected_dt.isoformat()}")
+        else:
+            final_start_times[camera_id] = reference_dt
+            logger.info(f"Inferred (missing) start time for {camera_id}: {reference_dt.isoformat()}")
+            
+    return final_start_times
 
 
 def run_pipeline(
@@ -801,7 +890,7 @@ def run_pipeline(
                 # Wall clock time for this frame
                 wall_time = start_wall + proc.frame_index / proc.fps
 
-                annotated = proc.process_frame(frame, wall_time)
+                annotated, ts = proc.process_frame(frame, wall_time)
 
                 # Push to GUI
                 if annotated is not None:
@@ -809,7 +898,7 @@ def run_pipeline(
                     gui_frame = cv2.resize(annotated, (640, 360))
                     ok, buf = cv2.imencode(".jpg", gui_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
                     if ok:
-                        SHARED.push_frame(camera_id, bytes(buf))
+                        SHARED.push_frame(camera_id, bytes(buf), ts)
 
             if not any_frames:
                 logger.info("All cameras exhausted. Pipeline complete.")

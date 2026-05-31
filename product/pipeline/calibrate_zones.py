@@ -114,11 +114,18 @@ button.action:hover { background:#30363d; }
         5. Click Export to download zones_override.json.
       </p>
     </div>
+    <div id="entry-line-section" style="display:none; background:#0d1117; border:1px solid #30363d; border-radius:4px; padding:10px;">
+      <h2>ENTRY/EXIT LINE</h2>
+      <button class="action" id="btn-draw-line" onclick="startDrawEntryLine()" style="background:#8b1111; color:#fff; border-color:#ff0033;">Draw Custom Entry Line</button>
+      <div style="font-size:0.68rem; color:#8b949e; margin-top:6px; word-break:break-all;">
+        Current: <span id="current-line-val" style="color:#ff0033; font-weight:bold;">none</span>
+      </div>
+    </div>
     <div>
       <h2>ZONES — <span id="cur-cam">none</span></h2>
       <div id="zone-list"></div>
-      <button class="action" onclick="clearLast()">Undo Last Point</button>
-      <button class="action" onclick="clearCurrent()">Cancel Current</button>
+      <button class="action" onclick="clearLast()" style="margin-top:6px;">Undo Last Point</button>
+      <button class="action" onclick="clearCurrent()" style="margin-top:4px;">Cancel Current</button>
     </div>
     <div>
       <h2>EXPORT</h2>
@@ -131,13 +138,15 @@ button.action:hover { background:#30363d; }
 const CAMERAS = __CAMERAS__;
 const COLORS  = __COLORS__;
 let frames    = {};  // camera_id → base64 jpeg
-let allZones  = {};  // camera_id → [{zone_id, sku_zone, polygon_norm, color}]
-CAMERAS.forEach(c => { allZones[c] = []; });
+let allZones  = __ALL_ZONES__;
+let entryLines = __ENTRY_LINES__;
 
 let currentCam     = null;
 let currentPolygon = [];   // [{x,y} normalised]
 let imgEl          = null;
 let imgW = 0, imgH = 0;
+let drawingEntryLine = false;
+let entryLinePoints = [];
 
 const canvas = document.getElementById("c");
 const ctx    = canvas.getContext("2d");
@@ -156,13 +165,24 @@ CAMERAS.forEach((cid, i) => {
 function selectCam(cid) {
   currentCam = cid;
   currentPolygon = [];
+  drawingEntryLine = false;
+  entryLinePoints = [];
   document.querySelectorAll(".cam-btn").forEach(b => b.classList.remove("active"));
   document.getElementById("btn-"+cid).classList.add("active");
   document.getElementById("cur-cam").textContent = cid;
 
+  // Toggle Entry Line controls
+  if (cid === "CAM_ENTRY_03") {
+    document.getElementById("entry-line-section").style.display = "block";
+    updateEntryLineText();
+  } else {
+    document.getElementById("entry-line-section").style.display = "none";
+  }
+
   if (frames[cid]) {
     drawScene();
     renderZoneList();
+    updateExportView();
     return;
   }
   fetch("/frame/" + encodeURIComponent(cid))
@@ -171,7 +191,30 @@ function selectCam(cid) {
       frames[cid] = d.frame;
       drawScene();
       renderZoneList();
+      updateExportView();
     });
+}
+
+function startDrawEntryLine() {
+  drawingEntryLine = true;
+  entryLinePoints = [];
+  entryLines[currentCam] = null; // Clear the old line so it does not render while drawing!
+  document.getElementById("btn-draw-line").textContent = "Click 2 points on frame...";
+  document.getElementById("btn-draw-line").style.background = "#d18b00";
+  document.getElementById("btn-draw-line").style.borderColor = "#ffaa00";
+  drawScene();
+  updateEntryLineText();
+  updateExportView();
+}
+
+function updateEntryLineText() {
+  const line = entryLines[currentCam];
+  if (line && line.length === 2) {
+    document.getElementById("current-line-val").textContent = 
+      `[${line[0][0].toFixed(2)}, ${line[0][1].toFixed(2)}] to [${line[1][0].toFixed(2)}, ${line[1][1].toFixed(2)}]`;
+  } else {
+    document.getElementById("current-line-val").textContent = "not set (uses default)";
+  }
 }
 
 // --- Drawing ---
@@ -184,6 +227,7 @@ function drawScene() {
     imgW = img.width; imgH = img.height;
     ctx.drawImage(img, 0, 0);
     drawZones();
+    drawEntryLine();
     drawCurrentPolygon();
   };
   img.src = "data:image/jpeg;base64," + frames[currentCam];
@@ -213,6 +257,47 @@ function drawZones() {
   });
 }
 
+function drawEntryLine() {
+  if (currentCam !== "CAM_ENTRY_03") return; // ONLY display entry line for CAM_ENTRY_03!
+
+  // Temporary point
+  if (drawingEntryLine && entryLinePoints.length === 1) {
+    const px = entryLinePoints[0][0] * imgW;
+    const py = entryLinePoints[0][1] * imgH;
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI*2);
+    ctx.fillStyle = "#ff0033";
+    ctx.fill();
+  }
+
+  // Committed line segment
+  const line = entryLines[currentCam];
+  if (line && line.length === 2) {
+    const px1 = line[0][0] * imgW;
+    const py1 = line[0][1] * imgH;
+    const px2 = line[1][0] * imgW;
+    const py2 = line[1][1] * imgH;
+
+    ctx.beginPath();
+    ctx.moveTo(px1, py1);
+    ctx.lineTo(px2, py2);
+    ctx.strokeStyle = "#ff0033";
+    ctx.lineWidth   = 4;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(px1, py1, 6, 0, Math.PI*2);
+    ctx.arc(px2, py2, 6, 0, Math.PI*2);
+    ctx.fillStyle = "#ff0033";
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle = "#ff0033";
+    ctx.font = "bold 13px monospace";
+    ctx.fillText("🔴 ENTRY/EXIT LINE", (px1 + px2)/2 - 60, (py1 + py2)/2 - 10);
+  }
+}
+
 function drawCurrentPolygon() {
   if (currentPolygon.length === 0) return;
   ctx.beginPath();
@@ -237,6 +322,28 @@ canvas.addEventListener("click", e => {
   const sy = canvas.height / rect.height;
   const nx = (e.clientX - rect.left)  * sx / imgW;
   const ny = (e.clientY - rect.top)   * sy / imgH;
+
+  if (drawingEntryLine) {
+    entryLinePoints.push([+nx.toFixed(4), +ny.toFixed(4)]);
+    if (entryLinePoints.length === 2) {
+      entryLines[currentCam] = entryLinePoints;
+      drawingEntryLine = false;
+      entryLinePoints = [];
+      
+      // Reset button style
+      document.getElementById("btn-draw-line").textContent = "Draw Custom Entry Line";
+      document.getElementById("btn-draw-line").style.background = "#8b1111";
+      document.getElementById("btn-draw-line").style.borderColor = "#ff0033";
+      
+      drawScene();
+      updateEntryLineText();
+      updateExportView();
+    } else {
+      drawScene();
+    }
+    return;
+  }
+
   currentPolygon.push({x: nx, y: ny});
   drawScene();
 });
@@ -264,6 +371,7 @@ function closePoly() {
   currentPolygon = [];
   drawScene();
   renderZoneList();
+  updateExportView();
 }
 
 function clearLast()    { currentPolygon.pop(); drawScene(); }
@@ -281,7 +389,8 @@ function renderZoneList() {
       <button class="del-btn" onclick="deleteZone(${i})">✕</button>
       <input type="text" value="${z.sku_zone}" placeholder="SKU label"
              onchange="allZones['${currentCam}'][${i}].sku_zone=this.value;
-                       allZones['${currentCam}'][${i}].zone_id='ZONE_'+this.value.toUpperCase().replace(/ /g,'_');">
+                       allZones['${currentCam}'][${i}].zone_id='ZONE_'+this.value.toUpperCase().replace(/ /g,'_');
+                       drawScene(); renderZoneList(); updateExportView();">
     `;
     list.appendChild(div);
   });
@@ -291,10 +400,13 @@ function deleteZone(i) {
   allZones[currentCam].splice(i, 1);
   drawScene();
   renderZoneList();
+  updateExportView();
 }
 
 function exportZones() {
-  const out = {};
+  const out = {
+    entry_line_norm: entryLines
+  };
   CAMERAS.forEach(cid => {
     if (allZones[cid] && allZones[cid].length > 0) {
       out[cid] = allZones[cid].map(z => ({
@@ -321,6 +433,23 @@ function hexToBGR(hex) {
   return [b, g, r];
 }
 
+function updateExportView() {
+  const out = {
+    entry_line_norm: entryLines
+  };
+  CAMERAS.forEach(cid => {
+    if (allZones[cid] && allZones[cid].length > 0) {
+      out[cid] = allZones[cid].map(z => ({
+        zone_id:      z.zone_id,
+        sku_zone:     z.sku_zone,
+        polygon_norm: z.polygon_norm,
+        color_bgr:    hexToBGR(z.color),
+      }));
+    }
+  });
+  document.getElementById("export-out").textContent = JSON.stringify(out, null, 2);
+}
+
 // Auto-select first camera
 if (CAMERAS.length) selectCam(CAMERAS[0]);
 </script>
@@ -332,15 +461,39 @@ if (CAMERAS.length) selectCam(CAMERAS[0]);
 def make_calib_app(clips_dir: str):
     from fastapi import FastAPI
     from fastapi.responses import HTMLResponse, JSONResponse
+    import sys
 
     app = FastAPI(title="Zone Calibration")
     cam_frames: Dict[str, str] = {}
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
+        # Inject existing zones and entry lines into the template
+        sys.path.append(os.path.dirname(__file__))
+        from zones import get_zones_for_camera, get_entry_line_for_camera
+        
+        initial_zones = {}
+        initial_entry_lines = {}
+        for cid in CAMERA_MAP.values():
+            initial_zones[cid] = []
+            for z in get_zones_for_camera(cid):
+                b, g, r = z.color_bgr
+                hex_color = f"#{r:02X}{g:02X}{b:02X}"
+                initial_zones[cid].append({
+                    "zone_id": z.zone_id,
+                    "sku_zone": z.sku_zone,
+                    "polygon_norm": z.polygon_norm,
+                    "color": hex_color
+                })
+            
+            cfg = get_entry_line_for_camera(cid)
+            initial_entry_lines[cid] = [cfg["p1"], cfg["p2"]]
+
         html = (CALIB_HTML
                 .replace("__CAMERAS__", json.dumps(list(CAMERA_MAP.values())))
-                .replace("__COLORS__",  json.dumps(ZONE_COLORS)))
+                .replace("__COLORS__",  json.dumps(ZONE_COLORS))
+                .replace("__ALL_ZONES__", json.dumps(initial_zones))
+                .replace("__ENTRY_LINES__", json.dumps(initial_entry_lines)))
         return html
 
     @app.get("/frame/{camera_id}")
