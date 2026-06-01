@@ -35,12 +35,14 @@ import cv2
 import numpy as np
 
 # Local modules
+from config     import cfg
 from events     import EventEmitter, make_timestamp
 from tracker    import VisitorIdentityManager
 from staff      import StaffBehaviourTracker
 from zones      import get_zones_for_camera, zone_for_point, ENTRY_LINE_NORM, get_entry_line_for_camera
 from entry_exit import EntryExitDetector
 from billing_queue import QueueTracker
+from behavior   import BehaviorStateMachine
 from gui_server import run_server, SHARED
 
 # ---------------------------------------------------------------------------
@@ -80,7 +82,7 @@ class YOLODetector:
     def _try_load_yolo(self, device: str):
         try:
             from ultralytics import YOLO
-            model_path = os.environ.get("YOLO_MODEL", "yolov8n.pt")
+            model_path = cfg.YOLO_MODEL
             self._model = YOLO(model_path)
             # Pick device
             if device == "auto":
@@ -307,6 +309,7 @@ class CameraProcessor:
         emitter:        EventEmitter,
         start_time_utc: datetime,
         fps:            float = 15.0,
+        behavior_sm:    Optional["BehaviorStateMachine"] = None,
     ):
         self.camera_id     = camera_id
         self.video_path    = video_path
@@ -316,6 +319,7 @@ class CameraProcessor:
         self.emitter       = emitter
         self.start_time    = start_time_utc
         self.fps           = fps
+        self.behavior_sm   = behavior_sm   # shared across cameras
 
         self.zones         = get_zones_for_camera(camera_id)
         self.dwell_tracker = ZoneDwellTracker()
@@ -372,23 +376,28 @@ class CameraProcessor:
         for track_id, bbox_xyxy, conf in detections:
             seen_track_ids.add(track_id)
 
-            # Optimization: Only extract embedding for new tracks or periodically (every 15 frames)
+            # Extract embedding for new tracks or periodically
             key = (track_id, self.camera_id)
             is_active = key in self.identity_mgr._active
-            if not is_active or (self.frame_index % 15 == 0):
+            if not is_active or (self.frame_index % cfg.EMBEDDING_REFRESH_FRAMES == 0):
                 embedding = self.identity_mgr.extract_embedding(frame_bgr, bbox_xyxy)
             else:
                 embedding = None
 
-            # Resolve visitor identity
-            visitor_id, is_new = self.identity_mgr.resolve(
-                track_id, self.camera_id, bbox_xyxy, embedding, wall_time
+            # Resolve visitor identity — returns (visitor_id, is_new, reid_conf)
+            visitor_id, is_new, reid_conf = self.identity_mgr.resolve(
+                track_id, self.camera_id, bbox_xyxy, embedding, wall_time,
+                det_conf=conf,
             )
 
-            # Get state
-            state = self.identity_mgr.get_active_state_by_track(track_id, self.camera_id)
+            # Get passport
+            state = self.identity_mgr.get_active_passport_by_track(track_id, self.camera_id)
             if state is None:
                 continue
+
+            # ── Confidence pipeline (spec: det × track × reid × zone) ──────
+            zone_conf  = cfg.DEFAULT_ZONE_CONF
+            final_conf = round(conf * state.last_track_conf * reid_conf * zone_conf, 4)
 
             # Update staff tracker
             cx = (bbox_xyxy[0] + bbox_xyxy[2]) / 2
@@ -410,40 +419,54 @@ class CameraProcessor:
             # ENTRY / EXIT logic (Camera 3 only)
             # -------------------------------------------------------
             if self.entry_detector is not None:
-                crossing = self.entry_detector.update(
-                    track_id, bbox_xyxy, w, h
-                )
+                crossing = self.entry_detector.update(track_id, bbox_xyxy, w, h)
                 if crossing == "ENTRY":
                     already_exited = self.identity_mgr.exit_count(visitor_id) > 0
                     seq = self.identity_mgr.increment_session_seq(visitor_id)
+                    passport = self.identity_mgr.get_passport(visitor_id)
+                    reentry_count = passport.reentry_count if passport else 0
+                    bstate = self.behavior_sm.update(
+                        visitor_id, "ENTRY", None, 0, wall_time
+                    ) if self.behavior_sm else None
                     self.emitter.emit_entry(
-                        visitor_id=visitor_id,
-                        camera_id=self.camera_id,
-                        timestamp=ts,
-                        is_staff=is_staff,
-                        confidence=conf,
-                        session_seq=seq,
-                        is_reentry=already_exited,
+                        visitor_id=visitor_id, camera_id=self.camera_id,
+                        timestamp=ts, is_staff=is_staff, confidence=final_conf,
+                        session_seq=seq, is_reentry=already_exited,
+                        reentry_count=reentry_count,
+                        behavior_state=bstate.value if bstate else "ENTERED",
+                        session_duration_ms=passport.session_duration_ms if passport else None,
+                        det_conf=conf, track_conf=state.last_track_conf,
+                        reid_conf=reid_conf, zone_conf=zone_conf,
                     )
                     state.has_entered = True
                 elif crossing == "EXIT":
                     seq = self.identity_mgr.increment_session_seq(visitor_id)
-                    # Flush zone dwell on exit
                     zone_exits = self.dwell_tracker.clear_visitor(visitor_id, wall_time)
+                    passport = self.identity_mgr.get_passport(visitor_id)
+                    bstate = self.behavior_sm.update(
+                        visitor_id, "EXIT", None, 0, wall_time
+                    ) if self.behavior_sm else None
                     for zid, dwell_ms in zone_exits:
                         zone_obj = next((z for z in self.zones if z.zone_id == zid), None)
                         sku = zone_obj.sku_zone if zone_obj else zid
+                        zb = self.behavior_sm.update(
+                            visitor_id, "ZONE_EXIT", zid, dwell_ms, wall_time
+                        ) if self.behavior_sm else None
                         self.emitter.emit_zone_exit(
                             visitor_id, self.camera_id, ts, zid, sku,
-                            dwell_ms, is_staff, conf, seq
+                            dwell_ms, is_staff, final_conf, seq,
+                            behavior_state=zb.value if zb else "BROWSING",
+                            det_conf=conf, track_conf=state.last_track_conf,
+                            reid_conf=reid_conf, zone_conf=zone_conf,
                         )
                     self.emitter.emit_exit(
-                        visitor_id=visitor_id,
-                        camera_id=self.camera_id,
-                        timestamp=ts,
-                        is_staff=is_staff,
-                        confidence=conf,
+                        visitor_id=visitor_id, camera_id=self.camera_id,
+                        timestamp=ts, is_staff=is_staff, confidence=final_conf,
                         session_seq=seq,
+                        session_duration_ms=passport.session_duration_ms if passport else None,
+                        behavior_state=bstate.value if bstate else "EXITED",
+                        det_conf=conf, track_conf=state.last_track_conf,
+                        reid_conf=reid_conf, zone_conf=zone_conf,
                     )
                     self.identity_mgr.mark_exited(visitor_id)
                     state.has_exited = True
@@ -454,7 +477,6 @@ class CameraProcessor:
             prev_zone = self._visitor_zones.get(visitor_id)
 
             if zone_id != prev_zone:
-                # Zone exit
                 if prev_zone is not None:
                     dwell_ms = self.dwell_tracker.exit(visitor_id, prev_zone, wall_time)
                     if dwell_ms is None:
@@ -462,34 +484,50 @@ class CameraProcessor:
                     zone_obj = next((z for z in self.zones if z.zone_id == prev_zone), None)
                     sku = zone_obj.sku_zone if zone_obj else prev_zone
                     seq = self.identity_mgr.increment_session_seq(visitor_id)
+                    zb = self.behavior_sm.update(
+                        visitor_id, "ZONE_EXIT", prev_zone, dwell_ms, wall_time
+                    ) if self.behavior_sm else None
                     self.emitter.emit_zone_exit(
                         visitor_id, self.camera_id, ts, prev_zone, sku,
-                        dwell_ms, is_staff, conf, seq
+                        dwell_ms, is_staff, final_conf, seq,
+                        behavior_state=zb.value if zb else "BROWSING",
+                        det_conf=conf, track_conf=state.last_track_conf,
+                        reid_conf=reid_conf, zone_conf=zone_conf,
                     )
-                # Zone enter
                 if zone_id is not None:
                     self.dwell_tracker.enter(visitor_id, zone_id, wall_time)
                     zone_obj = current_zone_obj
                     sku = zone_obj.sku_zone if zone_obj else zone_id
                     seq = self.identity_mgr.increment_session_seq(visitor_id)
+                    zb = self.behavior_sm.update(
+                        visitor_id, "ZONE_ENTER", zone_id, 0, wall_time
+                    ) if self.behavior_sm else None
                     self.emitter.emit_zone_enter(
                         visitor_id, self.camera_id, ts, zone_id, sku,
-                        is_staff, conf, seq
+                        is_staff, final_conf, seq,
+                        behavior_state=zb.value if zb else "BROWSING",
+                        reid_score=reid_conf if not is_new else None,
+                        det_conf=conf, track_conf=state.last_track_conf,
+                        reid_conf=reid_conf, zone_conf=zone_conf,
                     )
                 self._visitor_zones[visitor_id] = zone_id
                 state.zone_id = zone_id
-
             else:
-                # Still in same zone — check for dwell tick
                 if zone_id is not None:
                     dwell_ms = self.dwell_tracker.tick(visitor_id, zone_id, wall_time)
                     if dwell_ms is not None:
                         zone_obj = current_zone_obj
                         sku = zone_obj.sku_zone if zone_obj else zone_id
                         seq = self.identity_mgr.get_session_seq(visitor_id)
+                        zb = self.behavior_sm.update(
+                            visitor_id, "ZONE_DWELL", zone_id, dwell_ms, wall_time
+                        ) if self.behavior_sm else None
                         self.emitter.emit_zone_dwell(
                             visitor_id, self.camera_id, ts, zone_id, sku,
-                            dwell_ms, is_staff, conf, seq
+                            dwell_ms, is_staff, final_conf, seq,
+                            behavior_state=zb.value if zb else "DWELLING",
+                            det_conf=conf, track_conf=state.last_track_conf,
+                            reid_conf=reid_conf, zone_conf=zone_conf,
                         )
 
             # -------------------------------------------------------
@@ -521,17 +559,26 @@ class CameraProcessor:
             q_events = self.queue_tracker.update(billing_present, wall_time)
             for qev in q_events:
                 seq = qev["session_seq"]
+                qc  = qev["confidence"]
                 if qev["type"] == "BILLING_QUEUE_JOIN":
+                    qb = self.behavior_sm.update(
+                        qev["visitor_id"], "BILLING_QUEUE_JOIN", None, 0, wall_time
+                    ) if self.behavior_sm else None
                     self.emitter.emit_billing_queue_join(
                         qev["visitor_id"], self.camera_id, ts,
-                        qev["queue_depth"], qev["is_staff"],
-                        qev["confidence"], seq
+                        qev["queue_depth"], qev["is_staff"], qc, seq,
+                        behavior_state=qb.value if qb else "QUEUEING",
                     )
                 elif qev["type"] == "BILLING_QUEUE_ABANDON":
+                    qb = self.behavior_sm.update(
+                        qev["visitor_id"], "BILLING_QUEUE_ABANDON", None,
+                        qev["dwell_ms"], wall_time
+                    ) if self.behavior_sm else None
                     self.emitter.emit_billing_queue_abandon(
                         qev["visitor_id"], self.camera_id, ts,
-                        qev["dwell_ms"], qev["is_staff"],
-                        qev["confidence"], seq
+                        qev["dwell_ms"], qev["is_staff"], qc, seq,
+                        behavior_state=qb.value if qb else "BROWSING",
+                        wait_duration_ms=qev["dwell_ms"],
                     )
 
         # Purge stale lost tracks periodically
@@ -787,6 +834,7 @@ def run_pipeline(
     detector      = YOLODetector(device="auto")
     identity_mgr  = VisitorIdentityManager()
     staff_tracker = StaffBehaviourTracker()
+    behavior_sm   = BehaviorStateMachine()   # shared across all cameras
 
     # --- Discover camera files ---
     cam_nums  = list(CAMERA_MAP.keys())
@@ -820,6 +868,7 @@ def run_pipeline(
             staff_tracker=staff_tracker,
             emitter=emitter,
             start_time_utc=start_dt,
+            behavior_sm=behavior_sm,
         )
         if proc.open():
             processors[camera_id] = proc

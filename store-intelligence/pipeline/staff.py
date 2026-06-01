@@ -19,6 +19,8 @@ from collections import defaultdict, deque
 from typing import Dict, Tuple, Optional
 import numpy as np
 
+from config import cfg
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -27,9 +29,9 @@ logger = logging.getLogger(__name__)
 # Saturation: low  (black is desaturated)
 # Value: very low  (black is dark)
 # ---------------------------------------------------------------------------
-BLACK_SAT_MAX   = 60    # 0–255
-BLACK_VAL_MAX   = 60    # 0–255
-BLACK_PIXEL_RATIO_THRESHOLD = 0.40   # ≥40% of crop pixels must be black
+BLACK_SAT_MAX   = cfg.BLACK_SAT_MAX
+BLACK_VAL_MAX   = cfg.BLACK_VAL_MAX
+BLACK_PIXEL_RATIO_THRESHOLD = cfg.BLACK_ZONE_THRESHOLD
 
 
 def compute_black_ratio(crop_bgr: np.ndarray) -> float:
@@ -116,8 +118,8 @@ class StaffBehaviourTracker:
         self._cache_dirty:   Dict[str, bool]  = defaultdict(lambda: True)
 
         # Thresholds
-        self.MIN_FRAMES_FOR_STAFF_DECISION = 15
-        self.STAFF_SCORE_THRESHOLD         = 0.55
+        self.MIN_FRAMES_FOR_STAFF_DECISION = cfg.STAFF_MIN_FRAMES
+        self.STAFF_SCORE_THRESHOLD         = cfg.STAFF_SCORE_THRESHOLD
 
     def update(self, visitor_id: str, frame_bgr: np.ndarray,
                bbox_xyxy: Tuple[int, int, int, int],
@@ -166,10 +168,10 @@ class StaffBehaviourTracker:
         # Black clothing is the PRIMARY and MOST RELIABLE signal (80% weight)
         # Behavioural patterns provide secondary confirmation (20% weight)
         composite = (
-            black_p75      * 0.80 +
-            presence_score * 0.10 +
-            zone_diversity * 0.05 +
-            cam_diversity  * 0.05
+            black_p75      * cfg.STAFF_W_BLACK +
+            presence_score * cfg.STAFF_W_PRESENCE +
+            zone_diversity * cfg.STAFF_W_ZONE_DIV +
+            cam_diversity  * cfg.STAFF_W_CAM_DIV
         )
 
         # Confidence: how many frames we have

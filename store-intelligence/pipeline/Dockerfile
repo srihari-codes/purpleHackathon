@@ -36,8 +36,9 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 RUN mkdir -p /opt/yolo_models && \
-    curl -L -o /opt/yolo_models/yolov8n.pt https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt
-ENV YOLO_MODEL=/opt/yolo_models/yolov8n.pt
+    curl -L -o /opt/yolo_models/yolo11m.pt \
+    https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m.pt
+ENV YOLO_MODEL=/opt/yolo_models/yolo11m.pt
 
 # ── Copy pipeline source ──────────────────────────────────────────────────
 WORKDIR /app/pipeline

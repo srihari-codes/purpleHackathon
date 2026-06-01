@@ -2,12 +2,13 @@
 # Pin major versions for reproducibility; allow patch updates.
 
 # ── Core CV / Detection ───────────────────────────────────────────────────
-ultralytics>=8.2.0,<9.0        # YOLOv8 + ByteTrack (built-in)
+# YOLO11 requires ultralytics>=8.3.0 (spec: YOLO11m or YOLO11s)
+ultralytics>=8.3.0,<9.0        # YOLO11 + ByteTrack (built-in)
 opencv-python-headless>=4.9.0  # headless — no GUI display deps needed
 
 # ── Re-ID (OSNet) ─────────────────────────────────────────────────────────
-# torchreid is optional; pipeline falls back to HOG+color histogram if absent.
-# Uncomment to enable full OSNet re-ID:
+# torchreid is opt-in. Set USE_OSNET=1 env var to enable.
+# Adds ~1.5 GB to image; falls back to HSV+colour histogram when disabled.
 # torchreid>=1.4.0
 
 # ── PyTorch (CUDA or CPU) ────────────────────────────────────────────────

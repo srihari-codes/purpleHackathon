@@ -132,22 +132,29 @@ h1  { padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
 .cam-label { padding: 4px 8px; font-size: .75rem; color: #8b949e;
              border-bottom: 1px solid #21262d; }
 .cam-panel img { width: 100%; display: block; background: #000; min-height: 220px; }
-#sidebar { flex: 0 0 320px; display: flex; flex-direction: column; gap: 12px; }
+#sidebar { flex: 0 0 340px; display: flex; flex-direction: column; gap: 12px; }
 #metrics { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
            padding: 12px; }
 #metrics h2 { font-size: .8rem; color: #8b949e; margin-bottom: 8px; }
 .metric { display: flex; justify-content: space-between; padding: 3px 0;
           border-bottom: 1px solid #21262d; font-size: .85rem; }
 .metric span:last-child { color: #58a6ff; font-weight: bold; }
+/* Queue depth visual bar */
+#queue-bar-wrap { margin-top: 6px; }
+#queue-bar { height: 6px; background: #e3b341; border-radius: 3px;
+             transition: width 0.4s ease; width: 0%; max-width: 100%; }
 #events { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
           flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 #events h2 { font-size: .8rem; color: #8b949e; padding: 8px 12px;
              border-bottom: 1px solid #21262d; }
-#event-list { overflow-y: auto; flex: 1; max-height: 400px; padding: 4px 0; }
-.ev  { padding: 4px 12px; font-size: .73rem; border-bottom: 1px solid #0d1117;
+#event-list { overflow-y: auto; flex: 1; max-height: 500px; padding: 4px 0; }
+.ev  { padding: 4px 12px; font-size: .70rem; border-bottom: 1px solid #0d1117;
        cursor: default; }
 .ev:hover { background: #21262d; }
-.ev .etype { font-weight: bold; }
+.ev .etype { font-weight: bold; min-width: 120px; display: inline-block; }
+.ev .bstate { font-size:.62rem; background:#21262d; padding:1px 5px;
+              border-radius:3px; color:#8b949e; margin-left:4px; }
+.ev .confbadge { font-size:.60rem; color:#3fb950; margin-left:4px; }
 .ENTRY    { color: #56d364; }
 .EXIT     { color: #f85149; }
 .REENTRY  { color: #d2a8ff; }
@@ -171,6 +178,7 @@ h1  { padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
       <div class="metric"><span>Active Visitors</span><span id="m-visitors">—</span></div>
       <div class="metric"><span>Staff Detected</span><span id="m-staff">—</span></div>
       <div class="metric"><span>Queue Depth</span><span id="m-queue">—</span></div>
+      <div id="queue-bar-wrap"><div id="queue-bar"></div></div>
       <div class="metric"><span>Total Entries</span><span id="m-entries">—</span></div>
       <div class="metric"><span>Total Exits</span><span id="m-exits">—</span></div>
       <div class="metric"><span>Events Emitted</span><span id="m-events">—</span></div>
@@ -218,7 +226,6 @@ const wse = new WebSocket(`ws://${location.host}/ws/events`);
 const evList = document.getElementById("event-list");
 wse.onmessage = e => {
   const ev = JSON.parse(e.data);
-  // Update metrics if it's a metrics packet
   if (ev._type === "metrics") {
     document.getElementById("m-visitors").textContent = ev.active_visitors;
     document.getElementById("m-staff").textContent    = ev.staff_count;
@@ -227,20 +234,26 @@ wse.onmessage = e => {
     document.getElementById("m-exits").textContent    = ev.total_exits;
     document.getElementById("m-events").textContent   = ev.total_events;
     document.getElementById("m-cams").textContent     = (ev.cameras_active||[]).join(", ");
+    // Queue bar: max display at 10 people
+    const qPct = Math.min((ev.queue_depth || 0) / 10 * 100, 100);
+    document.getElementById("queue-bar").style.width = qPct + "%";
     return;
   }
-  // It's a store event
   const div = document.createElement("div");
   div.className = "ev";
   const ts = (ev.timestamp||"").substring(11,19);
+  const meta   = ev.metadata || {};
+  const bstate = meta.behavior_state || "";
+  const conf   = ev.confidence != null ? ev.confidence.toFixed(3) : "";
   div.innerHTML =
-    `<span class="etype ${ev.event_type}">${ev.event_type}</span> ` +
-    `<span style="color:#8b949e">${ts}</span> ` +
+    `<span class="etype ${ev.event_type}">${ev.event_type}</span>` +
+    `<span style="color:#8b949e"> ${ts}</span> ` +
     `<span style="color:#79c0ff">${ev.visitor_id||""}</span>` +
     (ev.zone_id ? ` <span style="color:#e3b341">${ev.zone_id}</span>` : "") +
+    (bstate ? `<span class="bstate">${bstate}</span>` : "") +
+    (conf   ? `<span class="confbadge">⬤${conf}</span>` : "") +
     (ev.is_staff ? ` <span style="color:#f85149">[STAFF]</span>` : "");
   evList.insertBefore(div, evList.firstChild);
-  // Keep max 200 rows
   while (evList.children.length > 200) evList.removeChild(evList.lastChild);
 };
 </script>
