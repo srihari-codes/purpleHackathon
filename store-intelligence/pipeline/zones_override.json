@@ -1,0 +1,600 @@
+{
+  "entry_line_norm": {
+    "CAM_FLOOR_01": [
+      [
+        0.1,
+        0.5
+      ],
+      [
+        0.9,
+        0.5
+      ]
+    ],
+    "CAM_FLOOR_02": [
+      [
+        0.1,
+        0.5
+      ],
+      [
+        0.9,
+        0.5
+      ]
+    ],
+    "CAM_ENTRY_03": [
+      [
+        0.326,
+        0.986
+      ],
+      [
+        0.699,
+        0.2304
+      ]
+    ],
+    "CAM_GODOWN_04": [
+      [
+        0.1,
+        0.5
+      ],
+      [
+        0.9,
+        0.5
+      ]
+    ],
+    "CAM_BILLING_05": [
+      [
+        0.1,
+        0.5
+      ],
+      [
+        0.9,
+        0.5
+      ]
+    ]
+  },
+  "CAM_FLOOR_01": [
+    {
+      "zone_id": "ZONE_EB",
+      "sku_zone": "EB",
+      "polygon_norm": [
+        [
+          0.02,
+          0.02
+        ],
+        [
+          0.22,
+          0.02
+        ],
+        [
+          0.22,
+          0.22
+        ],
+        [
+          0.02,
+          0.22
+        ]
+      ],
+      "color_bgr": [
+        0,
+        200,
+        100
+      ]
+    },
+    {
+      "zone_id": "ZONE_TFS",
+      "sku_zone": "TFS",
+      "polygon_norm": [
+        [
+          0.22,
+          0.02
+        ],
+        [
+          0.42,
+          0.02
+        ],
+        [
+          0.42,
+          0.22
+        ],
+        [
+          0.22,
+          0.22
+        ]
+      ],
+      "color_bgr": [
+        0,
+        180,
+        120
+      ]
+    },
+    {
+      "zone_id": "ZONE_FRAGRANCE",
+      "sku_zone": "FRAGRANCE",
+      "polygon_norm": [
+        [
+          0.05,
+          0.35
+        ],
+        [
+          0.28,
+          0.35
+        ],
+        [
+          0.28,
+          0.65
+        ],
+        [
+          0.05,
+          0.65
+        ]
+      ],
+      "color_bgr": [
+        180,
+        100,
+        0
+      ]
+    },
+    {
+      "zone_id": "ZONE_NAIL",
+      "sku_zone": "NAIL",
+      "polygon_norm": [
+        [
+          0.28,
+          0.35
+        ],
+        [
+          0.48,
+          0.35
+        ],
+        [
+          0.48,
+          0.65
+        ],
+        [
+          0.28,
+          0.65
+        ]
+      ],
+      "color_bgr": [
+        160,
+        80,
+        20
+      ]
+    },
+    {
+      "zone_id": "ZONE_FOH",
+      "sku_zone": "FOH",
+      "polygon_norm": [
+        [
+          0.48,
+          0.3
+        ],
+        [
+          0.8,
+          0.3
+        ],
+        [
+          0.8,
+          0.7
+        ],
+        [
+          0.48,
+          0.7
+        ]
+      ],
+      "color_bgr": [
+        200,
+        50,
+        50
+      ]
+    },
+    {
+      "zone_id": "ZONE_FACES",
+      "sku_zone": "FACES",
+      "polygon_norm": [
+        [
+          0.02,
+          0.75
+        ],
+        [
+          0.28,
+          0.75
+        ],
+        [
+          0.28,
+          0.98
+        ],
+        [
+          0.02,
+          0.98
+        ]
+      ],
+      "color_bgr": [
+        0,
+        100,
+        200
+      ]
+    },
+    {
+      "zone_id": "ZONE_SWISS_PLUS",
+      "sku_zone": "SWISS_PLUS",
+      "polygon_norm": [
+        [
+          0.38,
+          0.75
+        ],
+        [
+          0.6,
+          0.75
+        ],
+        [
+          0.6,
+          0.98
+        ],
+        [
+          0.38,
+          0.98
+        ]
+      ],
+      "color_bgr": [
+        0,
+        80,
+        220
+      ]
+    }
+  ],
+  "CAM_FLOOR_02": [
+    {
+      "zone_id": "ZONE_MINIMALIST",
+      "sku_zone": "MINIMALIST",
+      "polygon_norm": [
+        [
+          0.05,
+          0.02
+        ],
+        [
+          0.25,
+          0.02
+        ],
+        [
+          0.25,
+          0.22
+        ],
+        [
+          0.05,
+          0.22
+        ]
+      ],
+      "color_bgr": [
+        100,
+        200,
+        0
+      ]
+    },
+    {
+      "zone_id": "ZONE_AQUALOGICA",
+      "sku_zone": "AQUALOGICA",
+      "polygon_norm": [
+        [
+          0.25,
+          0.02
+        ],
+        [
+          0.45,
+          0.02
+        ],
+        [
+          0.45,
+          0.22
+        ],
+        [
+          0.25,
+          0.22
+        ]
+      ],
+      "color_bgr": [
+        80,
+        180,
+        20
+      ]
+    },
+    {
+      "zone_id": "ZONE_PILGRIM",
+      "sku_zone": "PILGRIM",
+      "polygon_norm": [
+        [
+          0.45,
+          0.02
+        ],
+        [
+          0.65,
+          0.02
+        ],
+        [
+          0.65,
+          0.22
+        ],
+        [
+          0.45,
+          0.22
+        ]
+      ],
+      "color_bgr": [
+        60,
+        160,
+        40
+      ]
+    },
+    {
+      "zone_id": "ZONE_DK",
+      "sku_zone": "D_AND_K",
+      "polygon_norm": [
+        [
+          0.65,
+          0.02
+        ],
+        [
+          0.88,
+          0.02
+        ],
+        [
+          0.88,
+          0.22
+        ],
+        [
+          0.65,
+          0.22
+        ]
+      ],
+      "color_bgr": [
+        40,
+        140,
+        60
+      ]
+    },
+    {
+      "zone_id": "ZONE_MAKEUP",
+      "sku_zone": "MAKEUP_UNIT",
+      "polygon_norm": [
+        [
+          0.3,
+          0.3
+        ],
+        [
+          0.75,
+          0.3
+        ],
+        [
+          0.75,
+          0.7
+        ],
+        [
+          0.3,
+          0.7
+        ]
+      ],
+      "color_bgr": [
+        200,
+        0,
+        150
+      ]
+    },
+    {
+      "zone_id": "ZONE_MARS_NYBAE",
+      "sku_zone": "MARS_NYBAE",
+      "polygon_norm": [
+        [
+          0.38,
+          0.75
+        ],
+        [
+          0.58,
+          0.75
+        ],
+        [
+          0.58,
+          0.98
+        ],
+        [
+          0.38,
+          0.98
+        ]
+      ],
+      "color_bgr": [
+        0,
+        60,
+        200
+      ]
+    },
+    {
+      "zone_id": "ZONE_LOREAL",
+      "sku_zone": "LOREAL",
+      "polygon_norm": [
+        [
+          0.58,
+          0.75
+        ],
+        [
+          0.75,
+          0.75
+        ],
+        [
+          0.75,
+          0.98
+        ],
+        [
+          0.58,
+          0.98
+        ]
+      ],
+      "color_bgr": [
+        0,
+        40,
+        220
+      ]
+    },
+    {
+      "zone_id": "ZONE_BEAUTY",
+      "sku_zone": "BEAUTY",
+      "polygon_norm": [
+        [
+          0.75,
+          0.75
+        ],
+        [
+          0.95,
+          0.75
+        ],
+        [
+          0.95,
+          0.98
+        ],
+        [
+          0.75,
+          0.98
+        ]
+      ],
+      "color_bgr": [
+        20,
+        20,
+        240
+      ]
+    }
+  ],
+  "CAM_ENTRY_03": [
+    {
+      "zone_id": "ZONE_ENTRANCE",
+      "sku_zone": "ENTRANCE",
+      "polygon_norm": [
+        [
+          0.1,
+          0.1
+        ],
+        [
+          0.9,
+          0.1
+        ],
+        [
+          0.9,
+          0.9
+        ],
+        [
+          0.1,
+          0.9
+        ]
+      ],
+      "color_bgr": [
+        255,
+        255,
+        0
+      ]
+    }
+  ],
+  "CAM_GODOWN_04": [
+    {
+      "zone_id": "ZONE_STAFF_AREA",
+      "sku_zone": "STAFF_AREA",
+      "polygon_norm": [
+        [
+          0.05,
+          0.05
+        ],
+        [
+          0.95,
+          0.05
+        ],
+        [
+          0.95,
+          0.95
+        ],
+        [
+          0.05,
+          0.95
+        ]
+      ],
+      "color_bgr": [
+        128,
+        128,
+        128
+      ]
+    }
+  ],
+  "CAM_BILLING_05": [
+    {
+      "zone_id": "ZONE_BILLING_QUEUE",
+      "sku_zone": "BILLING_QUEUE",
+      "polygon_norm": [
+        [
+          0.05,
+          0.2
+        ],
+        [
+          0.7,
+          0.2
+        ],
+        [
+          0.7,
+          0.95
+        ],
+        [
+          0.05,
+          0.95
+        ]
+      ],
+      "color_bgr": [
+        0,
+        255,
+        255
+      ]
+    },
+    {
+      "zone_id": "ZONE_CASH_COUNTER",
+      "sku_zone": "CASH_COUNTER",
+      "polygon_norm": [
+        [
+          0.7,
+          0.1
+        ],
+        [
+          0.98,
+          0.1
+        ],
+        [
+          0.98,
+          0.9
+        ],
+        [
+          0.7,
+          0.9
+        ]
+      ],
+      "color_bgr": [
+        255,
+        128,
+        0
+      ]
+    },
+    {
+      "zone_id": "ZONE_ACCESSORIES",
+      "sku_zone": "ACCESSORIES",
+      "polygon_norm": [
+        [
+          0.05,
+          0.05
+        ],
+        [
+          0.7,
+          0.2
+        ],
+        [
+          0.05,
+          0.2
+        ]
+      ],
+      "color_bgr": [
+        200,
+        200,
+        0
+      ]
+    }
+  ]
+}
