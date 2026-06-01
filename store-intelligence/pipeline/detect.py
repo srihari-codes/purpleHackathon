@@ -44,6 +44,8 @@ from entry_exit import EntryExitDetector
 from billing_queue import QueueTracker
 from behavior   import BehaviorStateMachine
 from gui_server import run_server, SHARED
+from memory     import VisitorMemoryManager
+from audit      import SystemAuditor
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(
@@ -384,11 +386,36 @@ class CameraProcessor:
             else:
                 embedding = None
 
+            # Prepare consensus inputs
+            fp = self.memory_mgr.fingerprint(visitor_id) if self.memory_mgr else None
+            traj_score = 0.5
+            if self.memory_mgr and fp:
+                # Basic proxy: if motion speed is high, trajectory is more defining
+                traj_score = min(1.0, 0.5 + fp.motion_speed_mean / 20.0)
+
             # Resolve visitor identity — returns (visitor_id, is_new, reid_conf)
             visitor_id, is_new, reid_conf = self.identity_mgr.resolve(
                 track_id, self.camera_id, bbox_xyxy, embedding, wall_time,
                 det_conf=conf,
+                current_zone=zone_id,
+                fingerprint=fp,
+                trajectory_score=traj_score,
             )
+
+            if self.memory_mgr:
+                self.memory_mgr.update(
+                    visitor_id=visitor_id,
+                    frame_bgr=frame_bgr,
+                    bbox_xyxy=bbox_xyxy,
+                    embedding=embedding,
+                    cx=(bbox_xyxy[0]+bbox_xyxy[2])/2,
+                    cy=(bbox_xyxy[1]+bbox_xyxy[3])/2,
+                    camera_id=self.camera_id,
+                    zone_id=zone_id,
+                )
+
+            # Health update
+            self.identity_mgr.on_frame_observed(visitor_id)
 
             # Get passport
             state = self.identity_mgr.get_active_passport_by_track(track_id, self.camera_id)
@@ -835,6 +862,10 @@ def run_pipeline(
     identity_mgr  = VisitorIdentityManager()
     staff_tracker = StaffBehaviourTracker()
     behavior_sm   = BehaviorStateMachine()   # shared across all cameras
+    memory_mgr    = VisitorMemoryManager()
+    auditor       = SystemAuditor(output_path)
+    auditor.set_broadcast(lambda w: SHARED.push_warning(w) if hasattr(SHARED, 'push_warning') else None)
+    SHARED.identity_mgr = identity_mgr
 
     # --- Discover camera files ---
     cam_nums  = list(CAMERA_MAP.keys())
@@ -869,6 +900,7 @@ def run_pipeline(
             emitter=emitter,
             start_time_utc=start_dt,
             behavior_sm=behavior_sm,
+            memory_mgr=memory_mgr,
         )
         if proc.open():
             processors[camera_id] = proc
@@ -969,6 +1001,19 @@ def run_pipeline(
                 queue_depth=queue_d,
                 cameras_active=active_cams,
             )
+
+            # --- Audit ---
+            if global_frame % cfg.AUDIT_INTERVAL_FRAMES == 0:
+                active_cams_map = {p.visitor_id: p.camera_id for p in identity_mgr._active.values()}
+                auditor.check(
+                    active_passports=identity_mgr._active,
+                    active_cameras=active_cams_map,
+                    staff_ids=staff_ids,
+                    queue_depth=queue_d,
+                    health_scores=identity_mgr.all_health_scores(),
+                    new_ids_this_cycle=0,  # Could be tracked if needed, keeping simple
+                    wall_time=time.time(),
+                )
 
             global_frame += 1
             if global_frame % 150 == 0:

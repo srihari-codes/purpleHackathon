@@ -206,3 +206,56 @@ class StaffBehaviourTracker:
             "cameras_seen":  list(self._cameras_seen.get(visitor_id, set())),
             "black_p75":     self.get_black_score(visitor_id),
         }
+
+
+# ---------------------------------------------------------------------------
+# StaffBehaviorProfile — behavioral patterns for staff identification.
+# A person wearing black is NOT automatically staff.
+# A person BEHAVING like staff raises confidence significantly.
+# Combined: final_staff_score = 0.60 × uniform_score + 0.40 × behavior_score
+# ---------------------------------------------------------------------------
+class StaffBehaviorProfile:
+    STAFF_MIN_SESSION_SEC    = 900.0
+    STAFF_MIN_ZONE_COUNT     = 4
+    STAFF_MIN_CAMERA_COUNT   = 3
+
+    def __init__(self):
+        self._zone_visits       = defaultdict(list)
+        self._camera_transitions= defaultdict(list)
+        self._session_start     = {}
+        self._session_count     = defaultdict(int)
+
+    def update(self, visitor_id: str, zone_id,
+               camera_id: str, wall_time: float, event_type: str = ""):
+        if visitor_id not in self._session_start:
+            self._session_start[visitor_id] = wall_time
+        if event_type in ("ENTRY", "REENTRY"):
+            self._session_count[visitor_id] += 1
+        if zone_id:
+            visits = self._zone_visits[visitor_id]
+            if not visits or visits[-1][0] != zone_id:
+                self._zone_visits[visitor_id].append([zone_id, wall_time, wall_time])
+            else:
+                self._zone_visits[visitor_id][-1][2] = wall_time
+        cams = self._camera_transitions[visitor_id]
+        if not cams or cams[-1][0] != camera_id:
+            self._camera_transitions[visitor_id].append((camera_id, wall_time))
+
+    def behavior_staff_score(self, visitor_id: str, wall_time: float) -> float:
+        visits      = self._zone_visits.get(visitor_id, [])
+        cams        = self._camera_transitions.get(visitor_id, [])
+        session_sec = wall_time - self._session_start.get(visitor_id, wall_time)
+        if session_sec < 120:
+            return 0.5
+        signals = [
+            min(1.0, session_sec / 3600.0),
+            min(1.0, len({v[0] for v in visits}) / self.STAFF_MIN_ZONE_COUNT),
+            min(1.0, len({c[0] for c in cams})   / self.STAFF_MIN_CAMERA_COUNT),
+            min(1.0, self._session_count.get(visitor_id, 0) / 3.0),
+        ]
+        weights = [0.35, 0.30, 0.25, 0.10]
+        return round(sum(s * w for s, w in zip(signals, weights)), 4)
+
+    def combined_staff_score(self, visitor_id: str, wall_time: float,
+                             uniform_score: float) -> float:
+        return round(0.60 * uniform_score + 0.40 * self.behavior_staff_score(visitor_id, wall_time), 4)

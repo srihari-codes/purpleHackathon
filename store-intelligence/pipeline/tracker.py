@@ -35,6 +35,10 @@ from typing import Dict, Optional, List, Tuple, Set
 import numpy as np
 
 from config import cfg
+from store_graph import StoreGraph
+from consensus import ConsensusIdentityEngine, ConsensusSignals
+from occlusion import OcclusionReasoner, OcclusionClassification, OcclusionType
+from health import TrackHealthMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +112,12 @@ class VisitorPassport:
     has_entered:        bool    = False
     has_exited:         bool    = False
     exit_count:         int     = 0
+
+    # Occlusion classification (set in mark_lost)
+    occlusion_type:     Optional[str]   = None
+    occlusion_retain_sec: float         = cfg.SUSPENDED_RETAIN_SEC
+    # Last consensus decision explanation
+    last_reid_explanation: Optional[dict] = None
 
     # Zone dwell tracking
     zone_id:            Optional[str]   = None
@@ -269,6 +279,14 @@ class VisitorIdentityManager:
         # visitor_id → session_seq counter
         self._session_seq: Dict[str, int] = defaultdict(int)
 
+        # ── Hybrid Consensus systems ──────────────────────────────────
+        self._consensus      = ConsensusIdentityEngine()
+        self._health         = TrackHealthMonitor()
+        self._occlusion      = OcclusionReasoner()
+        self._store_graph    = StoreGraph()
+        # visitor_id → most recent camera (for cross-camera tracking)
+        self._visitor_cameras: Dict[str, str] = {}
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -295,6 +313,9 @@ class VisitorIdentityManager:
         wall_time:  float,
         det_conf:   float = 1.0,
         track_conf: float = cfg.DEFAULT_TRACKING_CONF,
+        current_zone: Optional[str] = None,
+        fingerprint = None,
+        trajectory_score: float = 0.5,
     ) -> Tuple[str, bool, float]:
         """
         Returns (visitor_id, is_new_visitor, reid_confidence).
@@ -318,7 +339,13 @@ class VisitorIdentityManager:
 
         # 2. New track_id — try to match against SUSPENDED passports
         matched_vid, reid_score = self._match_suspended(
-            camera_id, bbox_xyxy, embedding, wall_time
+            camera_id=camera_id,
+            bbox_xyxy=bbox_xyxy,
+            embedding=embedding,
+            wall_time=wall_time,
+            current_zone=current_zone,
+            fingerprint=fingerprint,
+            trajectory_score=trajectory_score,
         )
 
         if matched_vid is not None:
@@ -335,6 +362,7 @@ class VisitorIdentityManager:
             if embedding is not None:
                 passport.appearance_embedding = embedding
             self._active[key] = passport
+            self._visitor_cameras[matched_vid] = camera_id
             logger.debug(
                 f"Re-associated track {track_id}@{camera_id} → {matched_vid} "
                 f"(reid_score={reid_score:.3f})"
@@ -411,16 +439,45 @@ class VisitorIdentityManager:
             last_reid_conf       = 1.0,
         )
         self._active[key] = passport
+        # Track health: new visitor starts at INIT score
+        self._visitor_cameras[visitor_id] = camera_id
         logger.debug(f"New visitor {visitor_id} track {track_id}@{camera_id}")
         return visitor_id, True, 1.0
 
-    def mark_lost(self, track_id: int, camera_id: str):
-        """Move ACTIVE track → SUSPENDED."""
+    def mark_lost(
+        self,
+        track_id: int,
+        camera_id: str,
+        frame_w: int = 1920,
+        frame_h: int = 1080,
+        nearby_track_count: int = 0,
+        confirmed_exit: bool = False,
+    ):
+        """Move ACTIVE track → SUSPENDED, classify occlusion type."""
         key = (track_id, camera_id)
         if key in self._active:
             passport = self._active.pop(key)
-            passport.state    = IdentityState.SUSPENDED
-            passport.is_active = False  # backward compat
+            passport.state = IdentityState.SUSPENDED
+
+            # Classify WHY this person disappeared
+            if passport.bbox_xyxy is not None:
+                ocl = self._occlusion.classify(
+                    last_bbox_xyxy     = passport.bbox_xyxy,
+                    frame_w            = frame_w,
+                    frame_h            = frame_h,
+                    nearby_track_count = nearby_track_count,
+                    last_zone          = passport.zone_id,
+                    confirmed_exit     = confirmed_exit,
+                    last_zone_is_billing = (passport.zone_id in
+                        ("ZONE_BILLING_QUEUE", "ZONE_CASH_COUNTER")),
+                )
+                passport.occlusion_type      = ocl.occlusion_type.value
+                passport.occlusion_retain_sec= ocl.retain_sec
+                logger.debug(
+                    f"SUSPEND {passport.visitor_id}: {ocl.occlusion_type.value} "
+                    f"retain={ocl.retain_sec}s conf={ocl.confidence:.2f}"
+                )
+
             self._suspended[passport.visitor_id] = passport
             logger.debug(
                 f"Track {track_id}@{camera_id} → SUSPENDED ({passport.visitor_id})"
@@ -521,83 +578,132 @@ class VisitorIdentityManager:
         bbox_xyxy:  Tuple,
         embedding:  Optional[np.ndarray],
         wall_time:  float,
+        current_zone: Optional[str] = None,
+        fingerprint = None,   # AppearanceFingerprint or None
+        trajectory_score: float = 0.5,
     ) -> Tuple[Optional[str], float]:
         """
-        Find best matching SUSPENDED passport.
-        Returns (visitor_id, composite_reid_score) or (None, 0.0).
+        Find best matching SUSPENDED passport using the ConsensusIdentityEngine.
 
-        reid_score = w_app × appearance_sim
-                   + w_spatial × spatial_score
-                   + w_temporal × temporal_score
-                   + w_handoff × handoff_bonus   ← spec addition
+        The old 4-signal formula is replaced by an 8-signal weighted vote:
+          reid, fingerprint, trajectory, temporal,
+          camera_transition, zone_plausibility, detection, track_health
+
+        Returns (visitor_id, identity_score) or (None, 0.0).
+        Also stores the decision explanation on the winning passport.
         """
-        best_vid   = None
-        best_score = 0.0
+        candidates = []
 
         for vid, passport in self._suspended.items():
             age = wall_time - passport.last_seen
 
-            # Hard gate: must be within SUSPENDED window
-            if age > cfg.SUSPENDED_RETAIN_SEC:
-                continue
+            # Use per-passport occlusion retention window (adaptive)
+            retain_sec = passport.occlusion_retain_sec
+            if age > retain_sec:
+                continue   # beyond this passport's window
 
-            # Camera plausibility
             same_cam = (passport.last_camera == camera_id)
-            adjacent = camera_id in CAMERA_ADJACENCY.get(passport.last_camera, set())
-            if not same_cam and not adjacent:
-                continue
 
-            # Cross-camera hard time gate
             if not same_cam and age > cfg.CROSS_CAM_TIME_WINDOW_SEC:
                 continue
 
-            # ── Score components ──────────────────────────────────────────
+            # ── Signal 1: ReID embedding similarity ──────────────────
+            reid_sim = cosine_similarity(passport.appearance_embedding, embedding)
 
-            # 1. Appearance similarity
-            app_sim = cosine_similarity(passport.appearance_embedding, embedding)
+            # ── Signal 2: AppearanceFingerprint holistic match ────────
+            fp_score = 0.5   # neutral if unavailable
+            if fingerprint is not None and passport.last_reid_explanation:
+                # Use last stored fingerprint score if we have it
+                fp_score = passport.last_reid_explanation.get(
+                    "signals", {}
+                ).get("fingerprint", 0.5)
 
-            # 2. Spatial proximity (same-camera only)
-            if same_cam and passport.bbox_xyxy is not None:
-                cx_new = (bbox_xyxy[0] + bbox_xyxy[2]) / 2
-                cy_new = (bbox_xyxy[1] + bbox_xyxy[3]) / 2
-                cx_old = (passport.bbox_xyxy[0] + passport.bbox_xyxy[2]) / 2
-                cy_old = (passport.bbox_xyxy[1] + passport.bbox_xyxy[3]) / 2
-                spatial_dist  = (abs(cx_new - cx_old) / 1920 +
-                                 abs(cy_new - cy_old) / 1080) / 2
-                spatial_score = max(0.0, 1.0 - spatial_dist / cfg.SPATIAL_PIXEL_THRESHOLD)
-            else:
-                spatial_score = 0.5  # cross-camera: rely on appearance
+            # ── Signal 3: Trajectory similarity (passed in) ───────────
+            # Caller computes this from VisitorMemory if available
 
-            # 3. Temporal score (more recent = better)
-            temporal_score = max(0.0, 1.0 - age / cfg.SUSPENDED_RETAIN_SEC)
+            # ── Signal 4: Temporal score ──────────────────────────────
+            temporal = max(0.0, 1.0 - age / max(retain_sec, 1.0))
 
-            # 4. Camera handoff bonus (spec: boost when adjacent camera + timing matches)
-            handoff_bonus = 0.0
-            if not same_cam and adjacent:
-                pair_key = (passport.last_camera, camera_id)
-                expected_transit = HANDOFF_TRANSIT_SEC.get(pair_key)
-                if expected_transit is not None:
-                    timing_error = abs(age - expected_transit)
-                    if timing_error <= HANDOFF_TIMING_TOLERANCE_SEC:
-                        # Smooth bonus: 1.0 at perfect timing, 0.0 at tolerance edge
-                        handoff_bonus = max(0.0, 1.0 - timing_error / HANDOFF_TIMING_TOLERANCE_SEC)
-                        logger.debug(
-                            f"Handoff bonus for {vid}: "
-                            f"{passport.last_camera}→{camera_id} "
-                            f"age={age:.1f}s expected={expected_transit}s "
-                            f"bonus={handoff_bonus:.2f}"
-                        )
-
-            # ── Composite score (spec formula) ─────────────────────────────
-            score = (
-                cfg.REID_W_APPEARANCE * app_sim
-                + cfg.REID_W_SPATIAL   * spatial_score
-                + cfg.REID_W_TEMPORAL  * temporal_score
-                + cfg.REID_W_HANDOFF   * handoff_bonus
+            # ── Signal 5: Camera transition probability ───────────────
+            cam_transition = self._store_graph.camera_transition_probability(
+                passport.last_camera, camera_id, age
             )
 
-            if score > best_score and score >= cfg.REID_THRESHOLD:
-                best_score = score
-                best_vid   = vid
+            # ── Signal 6: Zone plausibility ───────────────────────────
+            zone_plaus = self._store_graph.transition_probability(
+                passport.zone_id, current_zone
+            )
 
-        return best_vid, best_score
+            # ── Signal 7: Detection score (from passport) ─────────────
+            det_score = passport.last_det_conf
+
+            # ── Signal 8: Track health (normalised) ───────────────────
+            health_norm = self._health.normalised(vid)
+
+            signals = ConsensusSignals(
+                reid_score             = reid_sim,
+                fingerprint_score      = fp_score,
+                trajectory_score       = trajectory_score,
+                temporal_score         = temporal,
+                camera_transition_score= cam_transition,
+                zone_plausibility_score= zone_plaus,
+                detection_score        = det_score,
+                track_health           = health_norm,
+                candidate_visitor_id   = vid,
+                age_sec                = age,
+                cam_from               = passport.last_camera,
+                cam_to                 = camera_id,
+                zone_from              = passport.zone_id,
+                zone_to                = current_zone,
+            )
+            candidates.append((vid, signals))
+
+        if not candidates:
+            return None, 0.0
+
+        result = self._consensus.decide_batch(candidates)
+        if result is None:
+            return None, 0.0
+
+        best_vid, decision = result
+
+        # Store explanation on passport for GUI / audit
+        passport = self._suspended.get(best_vid)
+        if passport:
+            passport.last_reid_explanation = decision.explanation
+            # Update health based on decision quality
+            if decision.confidence_band == "LOW":
+                self._health.on_ambiguous_match(best_vid)
+            elif decision.confidence_band in ("MEDIUM", "HIGH"):
+                self._health.on_reasso_success(best_vid)
+            if "competing_match" in decision.explanation:
+                self._health.on_competing_association(best_vid)
+
+        explanation_str = self._consensus.format_explanation(decision)
+        logger.info(f"[CONSENSUS]\n{explanation_str}")
+
+        return best_vid, decision.identity_score
+
+    # ------------------------------------------------------------------
+    # Accessors for health and consensus (used by audit + GUI)
+    # ------------------------------------------------------------------
+
+    def health_score(self, visitor_id: str) -> float:
+        return self._health.score(visitor_id)
+
+    def health_normalised(self, visitor_id: str) -> float:
+        return self._health.normalised(visitor_id)
+
+    def trust_level(self, visitor_id: str) -> str:
+        return self._health.trust_level(visitor_id)
+
+    def last_explanation(self, visitor_id: str) -> Optional[dict]:
+        p = self.get_passport(visitor_id)
+        return p.last_reid_explanation if p else None
+
+    def on_frame_observed(self, visitor_id: str):
+        """Call once per frame while visitor is actively tracked."""
+        self._health.on_frame_observed(visitor_id)
+
+    def all_health_scores(self) -> dict:
+        return self._health.all_scores()

@@ -34,6 +34,8 @@ class SharedState:
         self.latest_frames: Dict[str, bytes] = {}
         # ring buffer of last 200 events
         self.event_log: deque = deque(maxlen=200)
+        # ring buffer of last 50 warnings
+        self.warnings_log: deque = deque(maxlen=50)
         # live metrics
         self.metrics: dict = {
             "active_visitors":  0,
@@ -73,6 +75,14 @@ class SharedState:
         if self._loop and not self._loop.is_closed():
             asyncio.run_coroutine_threadsafe(
                 self._broadcast_event(event_dict), self._loop
+            )
+
+    def push_warning(self, warning_dict: dict):
+        with self.lock:
+            self.warnings_log.appendleft(warning_dict)
+        if self._loop and not self._loop.is_closed():
+            asyncio.run_coroutine_threadsafe(
+                self._broadcast_event(warning_dict), self._loop
             )
 
     def update_metrics(self, active_visitors: int, staff_count: int,
@@ -143,12 +153,15 @@ h1  { padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
 #queue-bar-wrap { margin-top: 6px; }
 #queue-bar { height: 6px; background: #e3b341; border-radius: 3px;
              transition: width 0.4s ease; width: 0%; max-width: 100%; }
+#panels-wrap { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
 #events { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
-          flex: 1; overflow: hidden; display: flex; flex-direction: column; }
-#events h2 { font-size: .8rem; color: #8b949e; padding: 8px 12px;
+          flex: 1; display: flex; flex-direction: column; min-height: 200px; }
+#events h2, #warnings h2 { font-size: .8rem; color: #8b949e; padding: 8px 12px;
              border-bottom: 1px solid #21262d; }
-#event-list { overflow-y: auto; flex: 1; max-height: 500px; padding: 4px 0; }
-.ev  { padding: 4px 12px; font-size: .70rem; border-bottom: 1px solid #0d1117;
+#event-list, #warning-list { overflow-y: auto; flex: 1; padding: 4px 0; }
+#warnings { background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+            flex: 0 0 150px; display: flex; flex-direction: column; }
+.ev, .warn { padding: 4px 12px; font-size: .70rem; border-bottom: 1px solid #0d1117;
        cursor: default; }
 .ev:hover { background: #21262d; }
 .ev .etype { font-weight: bold; min-width: 120px; display: inline-block; }
@@ -163,6 +176,8 @@ h1  { padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
 .ZONE_DWELL { color: #8b949e; }
 .BILLING_QUEUE_JOIN    { color: #e3b341; }
 .BILLING_QUEUE_ABANDON { color: #f85149; }
+.warn .etype { color: #ffa657; font-weight: bold; }
+.warn.CRITICAL .etype { color: #f85149; }
 #status { font-size: .7rem; color: #8b949e; padding: 4px 12px; }
 </style>
 </head>
@@ -184,9 +199,15 @@ h1  { padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
       <div class="metric"><span>Events Emitted</span><span id="m-events">—</span></div>
       <div class="metric"><span>Cameras Active</span><span id="m-cams">—</span></div>
     </div>
-    <div id="events">
-      <h2>LIVE EVENT LOG</h2>
-      <div id="event-list"></div>
+    <div id="panels-wrap">
+      <div id="warnings">
+        <h2>SYSTEM AUDITOR WARNINGS</h2>
+        <div id="warning-list"></div>
+      </div>
+      <div id="events">
+        <h2>LIVE EVENT LOG</h2>
+        <div id="event-list"></div>
+      </div>
     </div>
     <div id="status">connecting...</div>
   </div>
@@ -239,6 +260,18 @@ wse.onmessage = e => {
     document.getElementById("queue-bar").style.width = qPct + "%";
     return;
   }
+  if (ev._type === "warning") {
+    const div = document.createElement("div");
+    div.className = "warn " + ev.severity;
+    const ts = (ev.timestamp||"").substring(11,19);
+    div.innerHTML = `<span style="color:#8b949e">${ts}</span> ` +
+                    `<span class="etype">${ev.anomaly_type}</span><br>` +
+                    `<span>${ev.description}</span>`;
+    const wl = document.getElementById("warning-list");
+    wl.insertBefore(div, wl.firstChild);
+    while (wl.children.length > 50) wl.removeChild(wl.lastChild);
+    return;
+  }
   const div = document.createElement("div");
   div.className = "ev";
   const ts = (ev.timestamp||"").substring(11,19);
@@ -286,7 +319,16 @@ def create_app(shared: SharedState):
             return {
                 "metrics":    shared.metrics,
                 "recent_events": list(shared.event_log)[:20],
+                "recent_warnings": list(shared.warnings_log)[:20],
             }
+
+    @app.get("/api/visitor/{visitor_id}/explanation")
+    async def explanation(visitor_id: str):
+        if hasattr(shared, "identity_mgr") and shared.identity_mgr:
+            expl = shared.identity_mgr.last_explanation(visitor_id)
+            if expl:
+                return expl
+        return {"error": "Explanation not found"}
 
     @app.websocket("/ws/frames")
     async def ws_frames(ws: WebSocket):
