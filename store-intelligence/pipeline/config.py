@@ -151,6 +151,70 @@ class _Config:
     # Used to detect zone teleports.
     STORE_MAX_SPEED_NORM_PER_SEC: float = 0.8
 
+    # ── Ghost Identity Layer ──────────────────────────────────────────────────
+    GHOST_TTL_SEC:               float = 30.0    # how long ghosts persist
+    GHOST_MIN_CONFIDENCE:        float = 0.40    # min confidence to create ghost
+    GHOST_RESURRECTION_THRESHOLD:float = 0.55    # min similarity to resurrect
+    GHOST_VELOCITY_DECAY:        float = 0.95    # per-second velocity damping
+    GHOST_MAX_COUNT:             int   = 50      # cap to prevent memory bloat
+
+    # ── Shadow Tracking ───────────────────────────────────────────────────────
+    SHADOW_MAX_FRAMES:           int   = 90      # max frames to maintain shadow (~6s @15fps)
+    SHADOW_VELOCITY_DAMPING:     float = 0.98    # per-frame velocity decay
+    SHADOW_MATCH_DISTANCE_PX:    float = 120.0   # max pixel distance for shadow match
+    SHADOW_MATCH_MIN_CONF:       float = 0.40    # min confidence to accept shadow match
+    SHADOW_CONFIDENCE_DECAY:     float = 0.97    # per-frame confidence decay
+
+    # ── Visitor DNA (Behavioral Fingerprint) ──────────────────────────────────
+    DNA_SPEED_EWMA_ALPHA:        float = 0.15    # smoothing for walking speed
+    DNA_PATTERN_WINDOW:          int   = 20      # zone transitions to remember
+    DNA_RHYTHM_BINS:             int   = 8       # directional movement bins
+    DNA_COMPARE_SPEED_WEIGHT:    float = 0.20
+    DNA_COMPARE_PATTERN_WEIGHT:  float = 0.35
+    DNA_COMPARE_RHYTHM_WEIGHT:   float = 0.15
+    DNA_COMPARE_DWELL_WEIGHT:    float = 0.15
+    DNA_COMPARE_QUEUE_WEIGHT:    float = 0.15
+
+    # ── Group Awareness ───────────────────────────────────────────────────────
+    GROUP_ENTRY_WINDOW_SEC:      float = 2.0     # max time gap for "entered together"
+    GROUP_PROXIMITY_PX:          float = 150.0   # max pixel distance to be in a group
+    GROUP_MIN_COFRAMES:          int   = 5       # min co-located frames to confirm group
+    GROUP_MAX_SIZE:              int   = 6       # max group size (sanity)
+    GROUP_CONFIDENCE_BOOST:      float = 0.10    # confidence boost for nearby group members
+
+    # ── Identity Courtroom ────────────────────────────────────────────────────
+    COURTROOM_ACTIVATION_BAND:   str   = "LOW"   # activate for this band and below
+    COURTROOM_MIN_DEFENDER_SCORE:float = 0.30    # min defender score to allow match
+    COURTROOM_VETO_THRESHOLD:    float = 0.70    # prosecutor score above this = veto
+
+    # ── Camera Reputation ─────────────────────────────────────────────────────
+    CAMERA_REPUTATION_PRIORS: dict = {
+        "CAM_FLOOR_01":   {"occlusion_risk": 0.40, "reliability": 0.80, "spec": "floor"},
+        "CAM_FLOOR_02":   {"occlusion_risk": 0.40, "reliability": 0.80, "spec": "floor"},
+        "CAM_ENTRY_03":   {"occlusion_risk": 0.15, "reliability": 0.95, "spec": "entry"},
+        "CAM_GODOWN_04":  {"occlusion_risk": 0.60, "reliability": 0.65, "spec": "staff"},
+        "CAM_BILLING_05": {"occlusion_risk": 0.20, "reliability": 0.90, "spec": "billing"},
+    }
+    CAMERA_REP_LEARNING_RATE:    float = 0.01
+    CAMERA_REP_MIN_MODIFIER:     float = 0.70
+
+    # ── Evidence Ledger ───────────────────────────────────────────────────────
+    EVIDENCE_MAX_HISTORY:        int   = 50      # max evidence entries per visitor
+
+    # ── Expanded Consensus Weights (10 signals) ──────────────────────────────
+    CONSENSUS_W_GROUP:           float = 0.05    # group continuity
+    CONSENSUS_W_STAFF_REP:       float = 0.00    # staff reputation (informational)
+
+    # ── Retail Physics Engine ─────────────────────────────────────────────────
+    PHYSICS_AVG_WALK_SPEED_MPS:  float = 1.4     # average human walking speed m/s
+    PHYSICS_WALK_SPEED_STD:      float = 0.5     # standard deviation
+    PHYSICS_STORE_LENGTH_M:      float = 15.0    # approximate store length in metres
+    PHYSICS_STORE_WIDTH_M:       float = 8.0     # approximate store width in metres
+    PHYSICS_MIN_TRANSITION_SEC:  float = 1.5     # minimum time between any two zones
+
+    # ── Store Memory Graph ────────────────────────────────────────────────────
+    MEMORY_GRAPH_MAX_EDGES:      int   = 10000   # cap edges for memory safety
+
 
 cfg = _Config()
 

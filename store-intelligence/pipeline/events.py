@@ -66,6 +66,7 @@ class StoreEvent:
         "track_conf":       None,
         "reid_conf":        None,
         "zone_conf":        None,
+        "confidence_lineage": None,  # Full breakdown of confidence factors
     })
     event_id:   str = field(default_factory=lambda: str(uuid.uuid4()))
 
@@ -75,7 +76,7 @@ class StoreEvent:
         for k in ("queue_depth", "sku_zone", "session_seq",
                   "behavior_state", "reid_score", "reentry_count",
                   "session_duration_ms", "wait_duration_ms",
-                  "det_conf", "track_conf", "reid_conf", "zone_conf"):
+                  "det_conf", "track_conf", "reid_conf", "zone_conf", "confidence_lineage"):
             d["metadata"].setdefault(k, None)
         return d
 
@@ -162,6 +163,7 @@ class EventEmitter:
         session_duration_ms: Optional[int] = None,
         det_conf: float = 1.0, track_conf: float = 1.0,
         reid_conf: float = 1.0, zone_conf: float = 1.0,
+        confidence_lineage: Optional[Dict[str, float]] = None,
     ) -> StoreEvent:
         etype = EventType.REENTRY if is_reentry else EventType.ENTRY
         ev = StoreEvent(
@@ -180,6 +182,7 @@ class EventEmitter:
                 "track_conf": round(track_conf, 4),
                 "reid_conf": round(reid_conf, 4),
                 "zone_conf": round(zone_conf, 4),
+                "confidence_lineage": confidence_lineage,
             },
         )
         self.emit(ev)
@@ -192,6 +195,7 @@ class EventEmitter:
         behavior_state: str = "EXITED",
         det_conf: float = 1.0, track_conf: float = 1.0,
         reid_conf: float = 1.0, zone_conf: float = 1.0,
+        confidence_lineage: Optional[Dict[str, float]] = None,
     ) -> StoreEvent:
         ev = StoreEvent(
             store_id=self.store_id, camera_id=camera_id,
@@ -209,6 +213,7 @@ class EventEmitter:
                 "track_conf": round(track_conf, 4),
                 "reid_conf": round(reid_conf, 4),
                 "zone_conf": round(zone_conf, 4),
+                "confidence_lineage": confidence_lineage,
             },
         )
         self.emit(ev)
@@ -222,6 +227,7 @@ class EventEmitter:
         reid_score: Optional[float] = None,
         det_conf: float = 1.0, track_conf: float = 1.0,
         reid_conf: float = 1.0, zone_conf: float = 1.0,
+        confidence_lineage: Optional[Dict[str, float]] = None,
     ) -> StoreEvent:
         ev = StoreEvent(
             store_id=self.store_id, camera_id=camera_id,
@@ -238,6 +244,7 @@ class EventEmitter:
                 "track_conf": round(track_conf, 4),
                 "reid_conf": round(reid_conf, 4),
                 "zone_conf": round(zone_conf, 4),
+                "confidence_lineage": confidence_lineage,
             },
         )
         self.emit(ev)
@@ -250,6 +257,7 @@ class EventEmitter:
         behavior_state: str = "BROWSING",
         det_conf: float = 1.0, track_conf: float = 1.0,
         reid_conf: float = 1.0, zone_conf: float = 1.0,
+        confidence_lineage: Optional[Dict[str, float]] = None,
     ) -> StoreEvent:
         ev = StoreEvent(
             store_id=self.store_id, camera_id=camera_id,
@@ -265,6 +273,7 @@ class EventEmitter:
                 "track_conf": round(track_conf, 4),
                 "reid_conf": round(reid_conf, 4),
                 "zone_conf": round(zone_conf, 4),
+                "confidence_lineage": confidence_lineage,
             },
         )
         self.emit(ev)
@@ -277,6 +286,7 @@ class EventEmitter:
         behavior_state: str = "DWELLING",
         det_conf: float = 1.0, track_conf: float = 1.0,
         reid_conf: float = 1.0, zone_conf: float = 1.0,
+        confidence_lineage: Optional[Dict[str, float]] = None,
     ) -> StoreEvent:
         ev = StoreEvent(
             store_id=self.store_id, camera_id=camera_id,
@@ -292,6 +302,7 @@ class EventEmitter:
                 "track_conf": round(track_conf, 4),
                 "reid_conf": round(reid_conf, 4),
                 "zone_conf": round(zone_conf, 4),
+                "confidence_lineage": confidence_lineage,
             },
         )
         self.emit(ev)
@@ -304,6 +315,7 @@ class EventEmitter:
         behavior_state: str = "QUEUEING",
         det_conf: float = 1.0, track_conf: float = 1.0,
         reid_conf: float = 1.0, zone_conf: float = 1.0,
+        confidence_lineage: Optional[Dict[str, float]] = None,
     ) -> StoreEvent:
         ev = StoreEvent(
             store_id=self.store_id, camera_id=camera_id,
@@ -321,6 +333,7 @@ class EventEmitter:
                 "track_conf": round(track_conf, 4),
                 "reid_conf": round(reid_conf, 4),
                 "zone_conf": round(zone_conf, 4),
+                "confidence_lineage": confidence_lineage,
             },
         )
         self.emit(ev)
@@ -334,6 +347,7 @@ class EventEmitter:
         wait_duration_ms: Optional[int] = None,
         det_conf: float = 1.0, track_conf: float = 1.0,
         reid_conf: float = 1.0, zone_conf: float = 1.0,
+        confidence_lineage: Optional[Dict[str, float]] = None,
     ) -> StoreEvent:
         ev = StoreEvent(
             store_id=self.store_id, camera_id=camera_id,
@@ -352,6 +366,7 @@ class EventEmitter:
                 "track_conf": round(track_conf, 4),
                 "reid_conf": round(reid_conf, 4),
                 "zone_conf": round(zone_conf, 4),
+                "confidence_lineage": confidence_lineage,
             },
         )
         self.emit(ev)

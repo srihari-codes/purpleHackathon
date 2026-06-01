@@ -163,7 +163,7 @@ h1  { padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
             flex: 0 0 150px; display: flex; flex-direction: column; }
 .ev, .warn { padding: 4px 12px; font-size: .70rem; border-bottom: 1px solid #0d1117;
        cursor: default; }
-.ev:hover { background: #21262d; }
+.ev:hover, .ghost:hover, .court:hover { background: #21262d; }
 .ev .etype { font-weight: bold; min-width: 120px; display: inline-block; }
 .ev .bstate { font-size:.62rem; background:#21262d; padding:1px 5px;
               border-radius:3px; color:#8b949e; margin-left:4px; }
@@ -207,6 +207,14 @@ h1  { padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
       <div id="events">
         <h2>LIVE EVENT LOG</h2>
         <div id="event-list"></div>
+      </div>
+      <div id="ghosts" style="background:#161b22; border:1px solid #30363d; border-radius:6px; flex:1; display:flex; flex-direction:column; min-height:150px;">
+        <h2 style="font-size:.8rem; color:#8b949e; padding:8px 12px; border-bottom:1px solid #21262d;">👻 GHOST IDENTITIES</h2>
+        <div id="ghost-list" style="overflow-y:auto; flex:1; padding:4px 0;"></div>
+      </div>
+      <div id="courtroom" style="background:#161b22; border:1px solid #30363d; border-radius:6px; flex:1; display:flex; flex-direction:column; min-height:150px;">
+        <h2 style="font-size:.8rem; color:#8b949e; padding:8px 12px; border-bottom:1px solid #21262d;">⚖️ IDENTITY COURTROOM</h2>
+        <div id="court-list" style="overflow-y:auto; flex:1; padding:4px 0;"></div>
       </div>
     </div>
     <div id="status">connecting...</div>
@@ -289,6 +297,29 @@ wse.onmessage = e => {
   evList.insertBefore(div, evList.firstChild);
   while (evList.children.length > 200) evList.removeChild(evList.lastChild);
 };
+
+// Polling for Ghosts and Courtroom
+setInterval(async () => {
+    try {
+        const res = await fetch("/api/ghosts");
+        const ghosts = await res.json();
+        const gl = document.getElementById("ghost-list");
+        gl.innerHTML = ghosts.map(g => `<div class="ev ghost" style="padding:4px 12px; font-size:.70rem; border-bottom:1px solid #0d1117;">` +
+            `<span style="color:#79c0ff">${g.visitor_id}</span> @ ${g.predicted_camera_id} ` +
+            `(TTL: ${Math.max(0, g.expire_at - Date.now()/1000).toFixed(1)}s)</div>`).join("");
+            
+        const eres = await fetch("/api/evidence");
+        const evids = await eres.json();
+        const cl = document.getElementById("court-list");
+        cl.innerHTML = evids.filter(e=>e.courtroom_verdict).slice(-10).reverse().map(e => {
+            const v = e.courtroom_verdict;
+            const color = v.should_match ? "#56d364" : "#f85149";
+            return `<div class="ev court" style="padding:4px 12px; font-size:.70rem; border-bottom:1px solid #0d1117;">` +
+            `<span style="color:${color}; font-weight:bold">${v.should_match ? "MATCH" : "REJECT"}</span> ` +
+            `<span style="color:#79c0ff">${e.visitor_id}</span> - ${v.judge_rationale}</div>`;
+        }).join("");
+    } catch(e){}
+}, 2000);
 </script>
 </body>
 </html>
@@ -329,6 +360,28 @@ def create_app(shared: SharedState):
             if expl:
                 return expl
         return {"error": "Explanation not found"}
+
+    @app.get("/api/ghosts")
+    async def ghosts():
+        if hasattr(shared, "identity_mgr") and shared.identity_mgr and hasattr(shared.identity_mgr, "_ghosts"):
+            import time
+            return [
+                {
+                    "visitor_id": g.visitor_id,
+                    "predicted_camera_id": g.predicted_camera_id,
+                    "expire_at": g.expire_at,
+                    "conf": g.confidence
+                } 
+                for g in shared.identity_mgr._ghosts._active_ghosts.values()
+                if g.expire_at > time.time()
+            ]
+        return []
+        
+    @app.get("/api/evidence")
+    async def evidence():
+        if hasattr(shared, "identity_mgr") and shared.identity_mgr and hasattr(shared.identity_mgr, "_evidence"):
+            return [s.to_dict() for s in shared.identity_mgr._evidence.export_ledger()]
+        return []
 
     @app.websocket("/ws/frames")
     async def ws_frames(ws: WebSocket):

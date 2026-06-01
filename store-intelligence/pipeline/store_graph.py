@@ -242,3 +242,213 @@ class StoreGraph:
                 results.append((c_to, base_prob))
         results.sort(key=lambda x: -x[1])
         return results[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 Evolution: Retail Physics Engine
+# ---------------------------------------------------------------------------
+from dataclasses import dataclass
+
+@dataclass
+class PhysicsVerdict:
+    is_valid:          bool
+    plausibility_score:float
+    violation_type:    Optional[str]  # None, "speed", "wall", "impossible"
+    explanation:       str
+
+
+class RetailPhysicsEngine(StoreGraph):
+    """
+    Validates identity transitions against physical reality.
+    Subclasses StoreGraph for backward compatibility.
+    """
+
+    def validate_transition(
+        self,
+        cam_from: Optional[str],
+        cam_to: Optional[str],
+        zone_from: Optional[str],
+        zone_to: Optional[str],
+        elapsed_sec: float,
+        walking_speed: float = 0.0
+    ) -> PhysicsVerdict:
+        """
+        Evaluate if a transition is physically possible.
+        """
+        if not cam_from or not cam_to:
+            return PhysicsVerdict(True, 0.5, None, "Missing camera context")
+
+        # 1. Hard impossibility checks
+        if not self.is_transition_physically_possible(zone_from, zone_to, elapsed_sec):
+            return PhysicsVerdict(
+                is_valid=False,
+                plausibility_score=0.0,
+                violation_type="impossible",
+                explanation=f"Transition from {zone_from} to {zone_to} in {elapsed_sec:.1f}s is impossible"
+            )
+
+        # 2. Wall collision / Path check
+        if self.wall_collision_check(zone_from, zone_to):
+            return PhysicsVerdict(
+                is_valid=False,
+                plausibility_score=0.0,
+                violation_type="wall",
+                explanation=f"Direct path between {zone_from} and {zone_to} crosses a physical barrier"
+            )
+
+        # 3. Speed plausibility
+        # For simplicity, we use the graph's transition prob mixed with speed expectation
+        base_prob = self.camera_transition_probability(cam_from, cam_to, elapsed_sec)
+        
+        # Estimate physical distance loosely based on hops
+        hops = self.camera_hop_distance(cam_from, cam_to)
+        est_distance = hops * 4.0  # Approx 4 meters per camera coverage gap
+        if zone_from != zone_to:
+            est_distance += 2.0
+            
+        speed_plausibility = self.walking_speed_plausibility(est_distance, elapsed_sec)
+
+        final_score = (base_prob * 0.7) + (speed_plausibility * 0.3)
+        
+        # Determine violation based on speed
+        violation = None
+        if speed_plausibility < 0.05 and elapsed_sec > 0:
+            actual_speed = est_distance / elapsed_sec
+            if actual_speed > cfg.PHYSICS_AVG_WALK_SPEED_MPS * 3:
+                violation = "speed"
+        
+        is_valid = (final_score > 0.1) and (violation is None)
+        
+        expl = "Plausible" if is_valid else f"Implausible transition (score {final_score:.2f})"
+        if violation == "speed":
+            expl = "Speed violation: moving too fast for human walk"
+
+        return PhysicsVerdict(
+            is_valid=is_valid,
+            plausibility_score=round(final_score, 4),
+            violation_type=violation,
+            explanation=expl
+        )
+
+    def walking_speed_plausibility(self, distance_m: float, elapsed_sec: float) -> float:
+        """Gaussian plausibility around 1.4 m/s walking speed."""
+        if elapsed_sec <= 0:
+            return 0.0 if distance_m > 0 else 1.0
+            
+        speed = distance_m / elapsed_sec
+        avg_speed = cfg.PHYSICS_AVG_WALK_SPEED_MPS
+        std_dev = cfg.PHYSICS_WALK_SPEED_STD
+        
+        # Very slow is okay (browsing), very fast is penalized
+        if speed <= avg_speed:
+            return 1.0
+            
+        # Gaussian decay for speeds > avg_speed
+        variance = std_dev ** 2
+        score = math.exp(-((speed - avg_speed) ** 2) / (2 * variance))
+        return max(0.01, score)
+
+    def wall_collision_check(self, zone_from: Optional[str], zone_to: Optional[str]) -> bool:
+        """
+        Check if moving directly between zones crosses a physical barrier.
+        Returns True if there is a collision (invalid path).
+        """
+        if not zone_from or not zone_to or zone_from == zone_to:
+            return False
+            
+        # Hardcoded barriers for the store layout
+        barriers = [
+            ({"ZONE_EB", "ZONE_TFS", "ZONE_FRAGRANCE"}, {"ZONE_MINIMALIST", "ZONE_AQUALOGICA"}), # Center gondola barrier
+            ({"ZONE_STAFF_AREA"}, {"ZONE_FRAGRANCE", "ZONE_NAIL", "ZONE_FACES"}) # Staff area wall
+        ]
+        
+        for group_a, group_b in barriers:
+            if (zone_from in group_a and zone_to in group_b) or \
+               (zone_to in group_a and zone_from in group_b):
+                return True # Barrier hit
+                
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 Evolution: Store Memory Graph
+# ---------------------------------------------------------------------------
+from collections import defaultdict
+
+@dataclass
+class GraphEdge:
+    source_type: str
+    source_id:   str
+    target_type: str
+    target_id:   str
+    rel_type:    str
+    wall_time:   float
+
+
+class StoreMemoryGraph:
+    """
+    Long-term session memory as a relationship graph.
+    In-memory implementation for high-speed tracking.
+    """
+    
+    def __init__(self):
+        # source_id -> list of edges
+        self._edges: Dict[str, List[GraphEdge]] = defaultdict(list)
+        self._edge_count = 0
+
+    def add_event(self, visitor_id: str, camera_id: str, zone_id: Optional[str], event_type: str, wall_time: float):
+        """Record relationships into the graph."""
+        if self._edge_count > cfg.MEMORY_GRAPH_MAX_EDGES:
+            # Prevent infinite growth in long-running processes; we would normally prune
+            pass 
+            
+        edges_to_add = []
+        
+        if event_type in ("ENTRY", "REENTRY"):
+            edges_to_add.append(GraphEdge("Visitor", visitor_id, "Store", "STORE", "ENTERED", wall_time))
+        elif event_type == "EXIT":
+            edges_to_add.append(GraphEdge("Visitor", visitor_id, "Store", "STORE", "EXITED", wall_time))
+            
+        if camera_id:
+            edges_to_add.append(GraphEdge("Visitor", visitor_id, "Camera", camera_id, "SEEN_ON", wall_time))
+            
+        if zone_id:
+            if event_type == "ZONE_ENTER":
+                edges_to_add.append(GraphEdge("Visitor", visitor_id, "Zone", zone_id, "ENTERED", wall_time))
+            elif event_type == "ZONE_EXIT":
+                edges_to_add.append(GraphEdge("Visitor", visitor_id, "Zone", zone_id, "EXITED", wall_time))
+            elif event_type == "ZONE_DWELL":
+                edges_to_add.append(GraphEdge("Visitor", visitor_id, "Zone", zone_id, "DWELLED", wall_time))
+            elif event_type == "BILLING_QUEUE_JOIN":
+                edges_to_add.append(GraphEdge("Visitor", visitor_id, "Zone", zone_id, "QUEUED", wall_time))
+
+        for edge in edges_to_add:
+            self._edges[visitor_id].append(edge)
+            self._edge_count += 1
+
+    def visitor_journey(self, visitor_id: str) -> List[GraphEdge]:
+        """Full journey edges for a visitor."""
+        return sorted(self._edges.get(visitor_id, []), key=lambda e: e.wall_time)
+
+    def check_continuity(self, visitor_id: str, expected_camera: str, expected_zone: Optional[str]) -> float:
+        """Does this location match the visitor's established pattern?"""
+        journey = self.visitor_journey(visitor_id)
+        if not journey:
+            return 0.5 # Neutral
+            
+        # Find last known camera and zone
+        last_cam = None
+        last_zone = None
+        for edge in reversed(journey):
+            if edge.target_type == "Camera" and not last_cam:
+                last_cam = edge.target_id
+            elif edge.target_type == "Zone" and not last_zone:
+                last_zone = edge.target_id
+            if last_cam and last_zone:
+                break
+                
+        # Simple heuristic: if they were just here, high continuity.
+        if last_cam == expected_camera and last_zone == expected_zone:
+            return 0.9
+            
+        return 0.5

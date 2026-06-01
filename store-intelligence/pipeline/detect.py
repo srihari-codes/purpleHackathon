@@ -46,6 +46,7 @@ from behavior   import BehaviorStateMachine
 from gui_server import run_server, SHARED
 from memory     import VisitorMemoryManager
 from audit      import SystemAuditor
+from camera_reputation import CameraReputation
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(
@@ -322,6 +323,9 @@ class CameraProcessor:
         self.start_time    = start_time_utc
         self.fps           = fps
         self.behavior_sm   = behavior_sm   # shared across cameras
+        
+        self.memory_mgr    = kwargs.get("memory_mgr")
+        self.camera_rep    = kwargs.get("camera_rep")
 
         self.zones         = get_zones_for_camera(camera_id)
         self.dwell_tracker = ZoneDwellTracker()
@@ -424,7 +428,8 @@ class CameraProcessor:
 
             # ── Confidence pipeline (spec: det × track × reid × zone) ──────
             zone_conf  = cfg.DEFAULT_ZONE_CONF
-            final_conf = round(conf * state.last_track_conf * reid_conf * zone_conf, 4)
+            rep_mod    = self.camera_rep.confidence_modifier(self.camera_id) if self.camera_rep else 1.0
+            final_conf = round(conf * state.last_track_conf * reid_conf * zone_conf * rep_mod, 4)
 
             # Update staff tracker
             cx = (bbox_xyxy[0] + bbox_xyxy[2]) / 2
@@ -848,9 +853,21 @@ def run_pipeline(
     emitter.open()
     emitter.set_broadcast_queue(None)   # GUI broadcast handled via SHARED.push_event
 
-    # Monkey-patch emitter to also push to SHARED
+    # Monkey-patch emitter to also push to SHARED and wire new modules
     _orig_emit = emitter.emit
     def _emit_and_share(event):
+        # 1. Update memory graph
+        # For simplicity we use wall_time = time.time() here
+        if hasattr(identity_mgr, "_memory_graph"):
+            identity_mgr._memory_graph.add_event(
+                event.visitor_id, event.camera_id, event.zone_id, event.event_type, time.time()
+            )
+            
+        # 2. Append confidence lineage
+        passport = identity_mgr.get_passport(event.visitor_id)
+        if passport and passport.last_reid_explanation:
+            event.metadata["confidence_lineage"] = passport.last_reid_explanation
+
         result = _orig_emit(event)
         if result:
             SHARED.push_event(event.to_dict())
@@ -863,6 +880,7 @@ def run_pipeline(
     staff_tracker = StaffBehaviourTracker()
     behavior_sm   = BehaviorStateMachine()   # shared across all cameras
     memory_mgr    = VisitorMemoryManager()
+    camera_rep    = CameraReputation()
     auditor       = SystemAuditor(output_path)
     auditor.set_broadcast(lambda w: SHARED.push_warning(w) if hasattr(SHARED, 'push_warning') else None)
     SHARED.identity_mgr = identity_mgr
@@ -901,6 +919,7 @@ def run_pipeline(
             start_time_utc=start_dt,
             behavior_sm=behavior_sm,
             memory_mgr=memory_mgr,
+            camera_rep=camera_rep,
         )
         if proc.open():
             processors[camera_id] = proc

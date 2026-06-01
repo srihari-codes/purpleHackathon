@@ -35,10 +35,16 @@ from typing import Dict, Optional, List, Tuple, Set
 import numpy as np
 
 from config import cfg
-from store_graph import StoreGraph
+from store_graph import StoreGraph, RetailPhysicsEngine, StoreMemoryGraph
 from consensus import ConsensusIdentityEngine, ConsensusSignals
 from occlusion import OcclusionReasoner, OcclusionClassification, OcclusionType
 from health import TrackHealthMonitor
+from ghost import GhostLayer
+from shadow import ShadowTracker
+from visitor_dna import VisitorDNATracker
+from group import GroupTracker
+from courtroom import IdentityCourtroom
+from evidence import EvidenceLedger
 
 logger = logging.getLogger(__name__)
 
@@ -283,7 +289,16 @@ class VisitorIdentityManager:
         self._consensus      = ConsensusIdentityEngine()
         self._health         = TrackHealthMonitor()
         self._occlusion      = OcclusionReasoner()
-        self._store_graph    = StoreGraph()
+        self._store_graph    = RetailPhysicsEngine()
+        
+        # ── Identity-Centric Evolution Modules ────────────────────────
+        self._memory_graph   = StoreMemoryGraph()
+        self._ghosts         = GhostLayer()
+        self._shadows        = ShadowTracker()
+        self._dna            = VisitorDNATracker()
+        self._groups         = GroupTracker()
+        self._courtroom      = IdentityCourtroom()
+        self._evidence       = EvidenceLedger()
         # visitor_id → most recent camera (for cross-camera tracking)
         self._visitor_cameras: Dict[str, str] = {}
 
@@ -323,6 +338,14 @@ class VisitorIdentityManager:
                         = composite score for re-associations.
         """
         key = (track_id, camera_id)
+        
+        # Calculate centers
+        cx, cy = (bbox_xyxy[0]+bbox_xyxy[2])/2, (bbox_xyxy[1]+bbox_xyxy[3])/2
+
+        # 1. Update Shadow Tracker
+        # Check if this matches an existing shadow before checking active tracks
+        # (Though usually active tracks are checked first. We'll just tick shadows centrally later, 
+        # but check for match here if it's not active)
 
         # 1. Already tracking this track → update and return
         if key in self._active:
@@ -337,7 +360,16 @@ class VisitorIdentityManager:
                 passport.appearance_embedding = embedding
             return passport.visitor_id, False, 1.0
 
-        # 2. New track_id — try to match against SUSPENDED passports
+        # 2. Shadow Match Pre-filter
+        shadow_match = self._shadows.match_shadow(bbox_xyxy, camera_id, 1920, 1080)
+        if shadow_match:
+            shadow_vid, shadow_conf = shadow_match
+            if shadow_vid in self._suspended:
+                logger.debug(f"Shadow match successful for {shadow_vid} on {camera_id}")
+                # We could force re-association, but let's let consensus do it with high confidence
+                pass 
+
+        # 3. Try to match against SUSPENDED passports
         matched_vid, reid_score = self._match_suspended(
             camera_id=camera_id,
             bbox_xyxy=bbox_xyxy,
@@ -346,6 +378,8 @@ class VisitorIdentityManager:
             current_zone=current_zone,
             fingerprint=fingerprint,
             trajectory_score=trajectory_score,
+            det_conf=det_conf,
+            track_conf=track_conf,
         )
 
         if matched_vid is not None:
@@ -363,6 +397,11 @@ class VisitorIdentityManager:
                 passport.appearance_embedding = embedding
             self._active[key] = passport
             self._visitor_cameras[matched_vid] = camera_id
+            
+            # Clean up ghost and shadow
+            self._ghosts.remove_ghost(matched_vid)
+            self._shadows.remove_shadow(matched_vid, camera_id)
+            
             logger.debug(
                 f"Re-associated track {track_id}@{camera_id} → {matched_vid} "
                 f"(reid_score={reid_score:.3f})"
@@ -479,6 +518,22 @@ class VisitorIdentityManager:
                 )
 
             self._suspended[passport.visitor_id] = passport
+            
+            # Create Ghost
+            vx = 0.0; vy = 0.0 # would be calculated from history
+            cx = (passport.bbox_xyxy[0] + passport.bbox_xyxy[2]) / 2 / frame_w
+            cy = (passport.bbox_xyxy[1] + passport.bbox_xyxy[3]) / 2 / frame_h
+            self._ghosts.create_ghost(
+                passport.visitor_id, cx, cy, vx, vy, camera_id, passport.zone_id,
+                passport.final_confidence, ocl.retain_sec, time.time()
+            )
+            
+            # Create Shadow
+            self._shadows.create_shadow(
+                passport.visitor_id, passport.bbox_xyxy, 
+                vx * frame_w, vy * frame_h, camera_id, passport.zone_id
+            )
+
             logger.debug(
                 f"Track {track_id}@{camera_id} → SUSPENDED ({passport.visitor_id})"
             )
@@ -581,16 +636,12 @@ class VisitorIdentityManager:
         current_zone: Optional[str] = None,
         fingerprint = None,   # AppearanceFingerprint or None
         trajectory_score: float = 0.5,
+        det_conf: float = 1.0,
+        track_conf: float = 1.0,
     ) -> Tuple[Optional[str], float]:
         """
         Find best matching SUSPENDED passport using the ConsensusIdentityEngine.
-
-        The old 4-signal formula is replaced by an 8-signal weighted vote:
-          reid, fingerprint, trajectory, temporal,
-          camera_transition, zone_plausibility, detection, track_health
-
-        Returns (visitor_id, identity_score) or (None, 0.0).
-        Also stores the decision explanation on the winning passport.
+        Includes Courtroom adversarial evaluation for ambiguous matches.
         """
         candidates = []
 
@@ -639,6 +690,16 @@ class VisitorIdentityManager:
 
             # ── Signal 8: Track health (normalised) ───────────────────
             health_norm = self._health.normalised(vid)
+            
+            # ── Signal 9: Group Continuity ────────────────────────────────
+            group_boost = self._groups.group_confidence_boost(vid, set()) # Simplified for now
+            
+            # ── Signal 10: Staff Reputation ───────────────────────────────
+            staff_score = passport.staff_confidence if passport.is_staff else 0.5
+            
+            # ── Signal 11: Visitor DNA ────────────────────────────────────
+            # Compare current trajectory/behavior with stored DNA
+            dna_score = 0.5 # Default neutral
 
             signals = ConsensusSignals(
                 reid_score             = reid_sim,
@@ -649,6 +710,9 @@ class VisitorIdentityManager:
                 zone_plausibility_score= zone_plaus,
                 detection_score        = det_score,
                 track_health           = health_norm,
+                group_continuity_score = group_boost,
+                staff_reputation_score = staff_score,
+                visitor_dna_score      = dna_score,
                 candidate_visitor_id   = vid,
                 age_sec                = age,
                 cam_from               = passport.last_camera,
@@ -666,11 +730,37 @@ class VisitorIdentityManager:
             return None, 0.0
 
         best_vid, decision = result
+        
+        # ── Identity Courtroom Evaluation ──────────────────────────────
+        verdict = self._courtroom.adjudicate(
+            candidate_signals=decision.explanation.get("signals", {}),
+            base_score=decision.identity_score,
+            confidence_band=decision.confidence_band,
+            context=decision.explanation.get("context", {})
+        )
+        
+        if verdict:
+            decision.should_associate = verdict.should_match
+            decision.identity_score = verdict.confidence
+            decision.explanation["courtroom_verdict"] = verdict.to_dict()
+            logger.debug(f"Courtroom changed match outcome for {best_vid}: {verdict.judge_rationale}")
+
+        if not decision.should_associate:
+            # Courtroom or Consensus rejected the match
+            return None, 0.0
 
         # Store explanation on passport for GUI / audit
         passport = self._suspended.get(best_vid)
         if passport:
             passport.last_reid_explanation = decision.explanation
+            
+            # Record Evidence to Ledger
+            self._evidence.record_from_consensus(
+                visitor_id=best_vid,
+                decision_dict=decision.explanation,
+                matched_to=None,
+                courtroom_verdict=verdict.to_dict() if verdict else None
+            )
             # Update health based on decision quality
             if decision.confidence_band == "LOW":
                 self._health.on_ambiguous_match(best_vid)

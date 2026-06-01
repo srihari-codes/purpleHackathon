@@ -49,6 +49,9 @@ class ConsensusSignals:
     zone_plausibility_score:float = 0.5   # StoreGraph zone transition prob
     detection_score:        float = 0.5   # YOLO detection confidence
     track_health:           float = 0.5   # normalised track health (0–1)
+    group_continuity_score: float = 0.5   # group co-location boost
+    staff_reputation_score: float = 0.5   # staff behavior combined score
+    visitor_dna_score:      float = 0.5   # visitor behavioral fingerprint sim
 
     # Metadata for explanation (not used in scoring)
     candidate_visitor_id:  Optional[str]   = None
@@ -99,6 +102,9 @@ class ConsensusIdentityEngine:
         "zone_plausibility",
         "detection",
         "track_health",
+        "group_continuity",
+        "staff_reputation",
+        "visitor_dna",
     ]
 
     def __init__(self):
@@ -111,6 +117,9 @@ class ConsensusIdentityEngine:
             "zone_plausibility": cfg.CONSENSUS_W_ZONE,
             "detection":         cfg.CONSENSUS_W_DETECTION,
             "track_health":      cfg.CONSENSUS_W_TRACK_HEALTH,
+            "group_continuity":  getattr(cfg, "CONSENSUS_W_GROUP", 0.05),
+            "staff_reputation":  getattr(cfg, "CONSENSUS_W_STAFF_REP", 0.0),
+            "visitor_dna":       getattr(cfg, "CONSENSUS_W_VISITOR_DNA", 0.05),
         }
         # Normalise so weights always sum to 1.0
         total = sum(raw_weights.values())
@@ -153,6 +162,9 @@ class ConsensusIdentityEngine:
             "zone_plausibility": signals.zone_plausibility_score,
             "detection":         signals.detection_score,
             "track_health":      signals.track_health,
+            "group_continuity":  signals.group_continuity_score,
+            "staff_reputation":  signals.staff_reputation_score,
+            "visitor_dna":       signals.visitor_dna_score,
         }
 
         contributions = {
@@ -306,6 +318,9 @@ class ConsensusIdentityEngine:
                 "zone_plausibility":  round(signals.zone_plausibility_score, 4),
                 "detection":          round(signals.detection_score, 4),
                 "track_health":       round(signals.track_health, 4),
+                "group_continuity":   round(signals.group_continuity_score, 4),
+                "staff_reputation":   round(signals.staff_reputation_score, 4),
+                "visitor_dna":        round(signals.visitor_dna_score, 4),
             },
             "weights": {k: round(v, 4) for k, v in self.weights.items()},
             "contributions": {k: round(v, 5) for k, v in contributions.items()},

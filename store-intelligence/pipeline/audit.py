@@ -39,6 +39,9 @@ class AnomalyType(str, Enum):
     NEGATIVE_QUEUE         = "NEGATIVE_QUEUE"
     IDENTITY_EXPLOSION     = "IDENTITY_EXPLOSION"
     TRACK_HEALTH_COLLAPSE  = "TRACK_HEALTH_COLLAPSE"
+    IMPOSSIBLE_CAMERA_TRANSITION = "IMPOSSIBLE_CAMERA_TRANSITION"
+    GHOST_RESURRECTION_FAILURE   = "GHOST_RESURRECTION_FAILURE"
+    GROUP_SPLIT_ANOMALY          = "GROUP_SPLIT_ANOMALY"
 
 
 @dataclass
@@ -163,6 +166,45 @@ class SystemAuditor:
             [camera_id], wall_time,
             metadata={"zone_from": zone_from, "zone_to": zone_to,
                       "elapsed_sec": round(elapsed_sec, 2)},
+        )
+        self._emit(w)
+        return w
+
+    def report_impossible_transition(
+        self,
+        visitor_id: str,
+        cam_from: str,
+        cam_to: str,
+        elapsed_sec: float,
+        explanation: str,
+        wall_time: float,
+    ) -> AuditWarning:
+        w = self._warn(
+            AnomalyType.IMPOSSIBLE_CAMERA_TRANSITION, "CRITICAL",
+            [visitor_id],
+            f"Physics Engine Veto: {explanation} ({cam_from} → {cam_to} in {elapsed_sec:.1f}s)",
+            [cam_from, cam_to], wall_time,
+            metadata={"cam_from": cam_from, "cam_to": cam_to, "elapsed_sec": round(elapsed_sec, 2)}
+        )
+        self._emit(w)
+        return w
+
+    def report_ghost_failure(self, visitor_id: str, camera_id: str, wall_time: float) -> AuditWarning:
+        w = self._warn(
+            AnomalyType.GHOST_RESURRECTION_FAILURE, "INFO",
+            [visitor_id],
+            f"Ghost expired without resurrection for visitor {visitor_id}",
+            [camera_id], wall_time,
+        )
+        self._emit(w)
+        return w
+
+    def report_group_split(self, group_members: List[str], camera_id: str, wall_time: float) -> AuditWarning:
+        w = self._warn(
+            AnomalyType.GROUP_SPLIT_ANOMALY, "WARNING",
+            group_members,
+            f"Group split anomaly: Group {group_members} observed separating unexpectedly",
+            [camera_id], wall_time,
         )
         self._emit(w)
         return w
