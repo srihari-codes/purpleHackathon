@@ -19,7 +19,7 @@ x-pipeline-base: &pipeline-base
     dockerfile: pipeline/Dockerfile
   volumes:
     # Real footage — override CLIPS_DIR env to change this path
-    - ${CLIPS_DIR:-../cctv_raw/CCTV Footage}:/data/clips:ro
+    - ${CLIPS_DIR:-./data/clips}:/data/clips:ro
     # Output: events.jsonl written to ./data/
     - ${DATA_DIR:-./data}:/data
     # Hot-reload pipeline source during development
