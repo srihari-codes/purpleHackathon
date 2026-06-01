@@ -365,22 +365,30 @@ def create_app(shared: SharedState):
     async def ghosts():
         if hasattr(shared, "identity_mgr") and shared.identity_mgr and hasattr(shared.identity_mgr, "_ghosts"):
             import time
+            now = time.time()
             return [
                 {
                     "visitor_id": g.visitor_id,
-                    "predicted_camera_id": g.predicted_camera_id,
-                    "expire_at": g.expire_at,
-                    "conf": g.confidence
-                } 
-                for g in shared.identity_mgr._ghosts._active_ghosts.values()
-                if g.expire_at > time.time()
+                    "predicted_camera_id": g.last_camera,
+                    "expire_at": g.created_at + g.ttl_sec,
+                    "conf": g.last_confidence
+                }
+                for g in shared.identity_mgr._ghosts.get_all()
+                if not g.is_expired(now)
             ]
         return []
         
     @app.get("/api/evidence")
     async def evidence():
         if hasattr(shared, "identity_mgr") and shared.identity_mgr and hasattr(shared.identity_mgr, "_evidence"):
-            return [s.to_dict() for s in shared.identity_mgr._evidence.export_ledger()]
+            ev = shared.identity_mgr._evidence
+            all_snaps = []
+            for vid in ev.all_visitor_ids():
+                for snap in ev.get_ledger(vid):
+                    d = snap.to_dict()
+                    d["courtroom_verdict"] = d.pop("courtroom", None)
+                    all_snaps.append(d)
+            return all_snaps[-200:]  # cap to last 200
         return []
 
     @app.websocket("/ws/frames")

@@ -278,11 +278,21 @@ def annotate_frame(
         color = (0, 0, 220) if is_staff else (0, 200, 50)
 
         cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-        label = f"{'STAFF' if is_staff else vid[-6:]} {conf:.2f}"
+        health = identity_mgr.health_score(vid)
+        label = f"{'STAFF' if is_staff else vid[-6:]} C:{state.final_confidence:.2f} H:{health:.0f}"
         if state.zone_id:
             label += f" [{state.zone_id.replace('ZONE_','')}]"
         cv2.putText(annotated, label, (x1, max(y1-4, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1)
+
+    # Draw Shadow Tracks
+    if hasattr(identity_mgr, "_shadows"):
+        for shadow in identity_mgr._shadows.active_shadows(camera_id):
+            sx1, sy1, sx2, sy2 = [int(v) for v in shadow.predicted_bbox]
+            # Draw dashed/dim rectangle for shadow
+            cv2.rectangle(annotated, (sx1, sy1), (sx2, sy2), (150, 150, 150), 1)
+            cv2.putText(annotated, f"SHADOW {shadow.visitor_id[-6:]}", (sx1, max(sy1-4, 12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
 
     # HUD
     hud_text = [
@@ -313,6 +323,8 @@ class CameraProcessor:
         start_time_utc: datetime,
         fps:            float = 15.0,
         behavior_sm:    Optional["BehaviorStateMachine"] = None,
+        memory_mgr=None,
+        camera_rep=None,
     ):
         self.camera_id     = camera_id
         self.video_path    = video_path
@@ -323,9 +335,9 @@ class CameraProcessor:
         self.start_time    = start_time_utc
         self.fps           = fps
         self.behavior_sm   = behavior_sm   # shared across cameras
-        
-        self.memory_mgr    = kwargs.get("memory_mgr")
-        self.camera_rep    = kwargs.get("camera_rep")
+
+        self.memory_mgr    = memory_mgr
+        self.camera_rep    = camera_rep
 
         self.zones         = get_zones_for_camera(camera_id)
         self.dwell_tracker = ZoneDwellTracker()
@@ -390,21 +402,27 @@ class CameraProcessor:
             else:
                 embedding = None
 
-            # Prepare consensus inputs
-            fp = self.memory_mgr.fingerprint(visitor_id) if self.memory_mgr else None
-            traj_score = 0.5
-            if self.memory_mgr and fp:
-                # Basic proxy: if motion speed is high, trajectory is more defining
-                traj_score = min(1.0, 0.5 + fp.motion_speed_mean / 20.0)
+            # Compute zone BEFORE resolve() so it can be passed as current_zone signal
+            cx = (bbox_xyxy[0] + bbox_xyxy[2]) / 2
+            cy = (bbox_xyxy[1] + bbox_xyxy[3]) / 2
+            current_zone_obj = zone_for_point(cx, cy, w, h, self.camera_id)
+            zone_id = current_zone_obj.zone_id if current_zone_obj else None
 
             # Resolve visitor identity — returns (visitor_id, is_new, reid_conf)
+            # fingerprint requires visitor_id, so we resolve first with zone_id only
             visitor_id, is_new, reid_conf = self.identity_mgr.resolve(
                 track_id, self.camera_id, bbox_xyxy, embedding, wall_time,
                 det_conf=conf,
                 current_zone=zone_id,
-                fingerprint=fp,
-                trajectory_score=traj_score,
+                fingerprint=None,       # updated below after visitor_id is known
+                trajectory_score=0.5,
             )
+
+            # Now compute fingerprint with the resolved visitor_id and update memory
+            fp = self.memory_mgr.fingerprint(visitor_id) if self.memory_mgr else None
+            traj_score = 0.5
+            if self.memory_mgr and fp:
+                traj_score = min(1.0, 0.5 + fp.motion_speed_mean / 20.0)
 
             if self.memory_mgr:
                 self.memory_mgr.update(
@@ -412,8 +430,8 @@ class CameraProcessor:
                     frame_bgr=frame_bgr,
                     bbox_xyxy=bbox_xyxy,
                     embedding=embedding,
-                    cx=(bbox_xyxy[0]+bbox_xyxy[2])/2,
-                    cy=(bbox_xyxy[1]+bbox_xyxy[3])/2,
+                    cx=cx,
+                    cy=cy,
                     camera_id=self.camera_id,
                     zone_id=zone_id,
                 )
@@ -430,12 +448,6 @@ class CameraProcessor:
             zone_conf  = cfg.DEFAULT_ZONE_CONF
             rep_mod    = self.camera_rep.confidence_modifier(self.camera_id) if self.camera_rep else 1.0
             final_conf = round(conf * state.last_track_conf * reid_conf * zone_conf * rep_mod, 4)
-
-            # Update staff tracker
-            cx = (bbox_xyxy[0] + bbox_xyxy[2]) / 2
-            cy = (bbox_xyxy[1] + bbox_xyxy[3]) / 2
-            current_zone_obj = zone_for_point(cx, cy, w, h, self.camera_id)
-            zone_id = current_zone_obj.zone_id if current_zone_obj else None
             
             # Optimization: Only compute black clothing score for new tracks or periodically (every 15 frames)
             skip_clothing = not (is_new or (self.frame_index % 15 == 0))
@@ -848,6 +860,18 @@ def run_pipeline(
     run_server(port=gui_port, shared=SHARED)
     logger.info(f"GUI available at http://localhost:{gui_port}")
 
+    # --- Shared detection modules ---
+    # (Must be instantiated BEFORE the emitter closure that captures them)
+    detector      = YOLODetector(device="auto")
+    identity_mgr  = VisitorIdentityManager()
+    staff_tracker = StaffBehaviourTracker()
+    behavior_sm   = BehaviorStateMachine()   # shared across all cameras
+    memory_mgr    = VisitorMemoryManager()
+    camera_rep    = CameraReputation()
+    auditor       = SystemAuditor(str(Path(output_path).parent))
+    auditor.set_broadcast(lambda w: SHARED.push_warning(w) if hasattr(SHARED, 'push_warning') else None)
+    SHARED.identity_mgr = identity_mgr
+
     # --- Event emitter ---
     emitter = EventEmitter(output_path, store_id)
     emitter.open()
@@ -857,33 +881,28 @@ def run_pipeline(
     _orig_emit = emitter.emit
     def _emit_and_share(event):
         # 1. Update memory graph
-        # For simplicity we use wall_time = time.time() here
         if hasattr(identity_mgr, "_memory_graph"):
-            identity_mgr._memory_graph.add_event(
-                event.visitor_id, event.camera_id, event.zone_id, event.event_type, time.time()
-            )
-            
+            try:
+                identity_mgr._memory_graph.add_event(
+                    event.visitor_id, event.camera_id,
+                    getattr(event, "zone_id", None), event.event_type, time.time()
+                )
+            except Exception:
+                pass
+
         # 2. Append confidence lineage
-        passport = identity_mgr.get_passport(event.visitor_id)
-        if passport and passport.last_reid_explanation:
-            event.metadata["confidence_lineage"] = passport.last_reid_explanation
+        try:
+            passport = identity_mgr.get_passport(event.visitor_id)
+            if passport and passport.last_reid_explanation:
+                event.metadata["confidence_lineage"] = passport.last_reid_explanation
+        except Exception:
+            pass
 
         result = _orig_emit(event)
         if result:
             SHARED.push_event(event.to_dict())
         return result
     emitter.emit = _emit_and_share
-
-    # --- Shared detection modules ---
-    detector      = YOLODetector(device="auto")
-    identity_mgr  = VisitorIdentityManager()
-    staff_tracker = StaffBehaviourTracker()
-    behavior_sm   = BehaviorStateMachine()   # shared across all cameras
-    memory_mgr    = VisitorMemoryManager()
-    camera_rep    = CameraReputation()
-    auditor       = SystemAuditor(output_path)
-    auditor.set_broadcast(lambda w: SHARED.push_warning(w) if hasattr(SHARED, 'push_warning') else None)
-    SHARED.identity_mgr = identity_mgr
 
     # --- Discover camera files ---
     cam_nums  = list(CAMERA_MAP.keys())
