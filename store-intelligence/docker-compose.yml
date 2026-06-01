@@ -16,7 +16,7 @@
 x-pipeline-base: &pipeline-base
   build:
     context: .
-    dockerfile: Dockerfile.pipeline
+    dockerfile: pipeline/Dockerfile
   volumes:
     # Real footage — override CLIPS_DIR env to change this path
     - ${CLIPS_DIR:-../cctv_raw/CCTV Footage}:/data/clips:ro
