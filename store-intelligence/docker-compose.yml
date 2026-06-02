@@ -1,67 +1,104 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Store Intelligence — Detection Layer
 #
-# Usage (full pipeline):
-#   docker compose up pipeline
-#
-# Point at real footage (overrides the default):
-#   CLIPS_DIR=/home/hari/workspace/purpleHackathon/cctv_raw/CCTV\ Footage \
+# Usage:
+#   GPU (default):
 #     docker compose up pipeline
 #
-# Environment overrides (pass via -e or .env file):
+#   CPU-only (no NVIDIA driver / CI):
+#     docker compose --profile cpu up pipeline-cpu
+#
+# Point at real footage:
+#   CLIPS_DIR=/path/to/CCTV docker compose up pipeline
+#
+# Build args (passed at docker compose build time):
+#   USE_CUDA=1   force CUDA torch (default when using nvidia base image)
+#   USE_CUDA=0   force CPU torch (for cpu profile)
+#
+# Runtime environment overrides:
 #   STORE_ID, CLIPS_DIR, OUTPUT, GUI_PORT, SPEED, LOG_LEVEL, CAM3_START_ISO,
 #   POS_ABANDON_WINDOW_SEC (45 for short clips, 300 for 20-min production)
 # ─────────────────────────────────────────────────────────────────────────────
 
-x-pipeline-base: &pipeline-base
-  build:
-    context: .
-    dockerfile: pipeline/Dockerfile
-  volumes:
-    # Real footage — override CLIPS_DIR env to change this path
-    - ${CLIPS_DIR:-./data/clips}:/data/clips:ro
-    # Output: events.jsonl written to ./data/
-    - ${DATA_DIR:-./data}:/data
-    # Hot-reload pipeline source during development
-    - ./pipeline:/app/pipeline:ro
-  environment:
-    STORE_ID: ${STORE_ID:-STORE_BLR_002}
-    CLIPS_DIR: /data/clips
-    OUTPUT: /data/events.jsonl
-    GUI_PORT: ${GUI_PORT:-8080}
-    SPEED: ${SPEED:-0} # 0 = max speed; 1.0 = real-time
-    LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    PYTHONUNBUFFERED: "1"
-    CAM3_START_ISO: ${CAM3_START_ISO:-}
-    # Billing queue abandon window (seconds).
-    # 45s for 2-min test clips; set to 300 for 20-min production clips.
-    POS_ABANDON_WINDOW_SEC: ${POS_ABANDON_WINDOW_SEC:-45}
-    # CUDA device visibility — set to "" to force CPU
-    NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
-    NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+# ── Shared base config ────────────────────────────────────────────────────────
+x-pipeline-env: &pipeline-env
+  STORE_ID: ${STORE_ID:-STORE_BLR_002}
+  CLIPS_DIR: /data/clips
+  OUTPUT: /data/events.jsonl
+  GUI_PORT: ${GUI_PORT:-8080}
+  SPEED: ${SPEED:-0}              # 0 = max speed; 1.0 = real-time
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  PYTHONUNBUFFERED: "1"
+  CAM3_START_ISO: ${CAM3_START_ISO:-}
+  # Billing queue abandon window (seconds).
+  # 45s for 2-min test clips; set to 300 for 20-min production clips.
+  POS_ABANDON_WINDOW_SEC: ${POS_ABANDON_WINDOW_SEC:-45}
+
+x-pipeline-volumes: &pipeline-volumes
+  - ${CLIPS_DIR:-./data/clips}:/data/clips:ro
+  - ${DATA_DIR:-./data}:/data
+  # Hot-reload pipeline source during development
+  - ./pipeline:/app/pipeline:ro
 
 services:
-  # ── Main detection pipeline ───────────────────────────────────────────────
+  # ── GPU pipeline (default) ────────────────────────────────────────────────
   pipeline:
-    <<: *pipeline-base
+    build:
+      context: .
+      dockerfile: pipeline/Dockerfile
+      args:
+        # USE_CUDA=auto → installs CUDA torch when BASE_IMAGE contains "cuda"
+        USE_CUDA: ${USE_CUDA:-auto}
     container_name: store_detection_pipeline
+    volumes: *pipeline-volumes
+    environment:
+      <<: *pipeline-env
+      # Tell NVIDIA container runtime to expose GPU
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
     ports:
       - "${GUI_PORT:-8080}:8080"
     restart: "no"
-    command: [] # uses Dockerfile ENTRYPOINT (run.sh)
+    # Request GPU access via the Docker GPU reservation API (compose v2+)
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [ gpu ]
+              capabilities: [gpu]
+
+  # ── CPU-only pipeline (no NVIDIA driver required) ─────────────────────────
+  # Run with:  docker compose --profile cpu up pipeline-cpu
+  pipeline-cpu:
+    profiles: [cpu]
+    build:
+      context: .
+      dockerfile: pipeline/Dockerfile
+      args:
+        BASE_IMAGE: ubuntu:22.04
+        USE_CUDA: "0"
+    container_name: store_detection_pipeline_cpu
+    volumes: *pipeline-volumes
+    environment:
+      <<: *pipeline-env
+      # Explicitly hide all GPUs so torch falls back to CPU cleanly
+      NVIDIA_VISIBLE_DEVICES: "void"
+    ports:
+      - "${GUI_PORT:-8080}:8080"
+    restart: "no"
 
   # ── Zone calibration tool (run once to draw zone polygons) ───────────────
   calibrate:
-    <<: *pipeline-base
+    build:
+      context: .
+      dockerfile: pipeline/Dockerfile
+      args:
+        USE_CUDA: ${USE_CUDA:-auto}
     container_name: store_zone_calibrator
+    volumes: *pipeline-volumes
+    environment: *pipeline-env
     ports:
       - "8081:8081"
     restart: "no"
-    entrypoint: [ "python3", "/app/pipeline/calibrate_zones.py", "--clips_dir", "/data/clips", "--port", "8081" ]
+    entrypoint: ["python3", "/app/pipeline/calibrate_zones.py", "--clips_dir", "/data/clips", "--port", "8081"]

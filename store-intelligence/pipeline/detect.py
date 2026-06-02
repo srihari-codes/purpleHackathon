@@ -84,25 +84,43 @@ class YOLODetector:
 
     def _try_load_yolo(self, device: str):
         try:
+            import torch
             from ultralytics import YOLO
-            model_path = cfg.YOLO_MODEL
-            self._model = YOLO(model_path)
-            # Pick device
+
+            # ── Device resolution ─────────────────────────────────────────
             if device == "auto":
-                import torch
                 dev = "cuda" if torch.cuda.is_available() else "cpu"
             else:
                 dev = device
+
+            # Rich diagnostic log so the operator can confirm GPU is active
+            cuda_avail = torch.cuda.is_available()
+            gpu_name   = torch.cuda.get_device_name(0) if cuda_avail else "N/A"
+            logger.info(
+                f"YOLODetector: torch={torch.__version__} | "
+                f"CUDA available={cuda_avail} | GPU={gpu_name} | "
+                f"resolved device='{dev}'"
+            )
+            if device == "auto" and not cuda_avail:
+                logger.warning(
+                    "YOLODetector: CUDA not available — running on CPU. "
+                    "If you expected GPU, check that the container was built "
+                    "with USE_CUDA=1 and is started with --gpus all / nvidia runtime."
+                )
+
+            model_path = cfg.YOLO_MODEL
+            self._model = YOLO(model_path)
             self._model.to(dev)
             self._resolved_device = dev
             self._use_yolo = True
-            logger.info(f"YOLODetector: YOLOv8 loaded on {dev}")
+            logger.info(f"YOLODetector: YOLO model loaded → running on '{dev}'")
         except Exception as e:
-            logger.warning(f"YOLODetector: YOLOv8 unavailable ({e}). "
+            logger.warning(f"YOLODetector: YOLO unavailable ({e}). "
                            f"Falling back to MOG2 background subtraction.")
             self._use_yolo = False
             self._resolved_device = "cpu"
             self._bg_sub = {}    # camera_id → MOG2 subtractor
+
 
     def detect_and_track(
         self, frame_bgr: np.ndarray, camera_id: str

@@ -1,5 +1,12 @@
 # Detection pipeline requirements
 # Pin major versions for reproducibility; allow patch updates.
+#
+# NOTE: torch and torchvision are intentionally NOT listed here.
+# They are installed by the Dockerfile with the correct CUDA/CPU wheel
+# so that torch.cuda.is_available() returns True on GPU hosts.
+# If running outside Docker, install manually:
+#   GPU:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   CPU:  pip install torch torchvision
 
 # ── Core CV / Detection ───────────────────────────────────────────────────
 # YOLO11 requires ultralytics>=8.3.0 (spec: YOLO11m or YOLO11s)
@@ -10,14 +17,6 @@ opencv-python-headless>=4.9.0  # headless — no GUI display deps needed
 # torchreid is opt-in. Set USE_OSNET=1 env var to enable.
 # Adds ~1.5 GB to image; falls back to HSV+colour histogram when disabled.
 # torchreid>=1.4.0
-
-# ── PyTorch (CUDA or CPU) ────────────────────────────────────────────────
-# Install the CUDA variant when running on GPU host:
-#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-# The line below installs CPU-only torch as a safe default inside Docker.
-# The CUDA variant is installed by docker-compose via the pip override below.
-torch>=2.1.0
-torchvision>=0.16.0
 
 # ── Web GUI / API ─────────────────────────────────────────────────────────
 fastapi>=0.110.0
