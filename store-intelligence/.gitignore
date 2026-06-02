@@ -139,3 +139,7 @@ Thumbs.db
 data/
 yolo*.pt
 *.jsonl
+
+#virtual environment
+venv/*
+.venv/*

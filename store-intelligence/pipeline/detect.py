@@ -595,8 +595,11 @@ class CameraProcessor:
             # -------------------------------------------------------
             # BILLING QUEUE (Camera 5 only)
             # -------------------------------------------------------
+            # IMPORTANT: Only count visitors in ZONE_BILLING_QUEUE (customer side).
+            # ZONE_CASH_COUNTER is the cashier's side — staff stand there.
+            # Anyone in ZONE_CASH_COUNTER is NOT a customer in queue.
             if (self.queue_tracker is not None and
-                    zone_id in ("ZONE_BILLING_QUEUE", "ZONE_CASH_COUNTER")):
+                    zone_id == "ZONE_BILLING_QUEUE" and not is_staff):
                 seq = self.identity_mgr.get_session_seq(visitor_id)
                 billing_present.append((visitor_id, is_staff, conf, seq))
 

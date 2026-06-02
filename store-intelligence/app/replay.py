@@ -97,6 +97,8 @@ class ReplayEngine:
         audit:         AuditTimeline,
         mode:          ReplayMode = ReplayMode.LIVE,
         speed:         float      = 0.0,
+        verifier = None,
+        correlation = None,
     ) -> None:
         self._event_store   = event_store
         self._session_store = session_store
@@ -104,6 +106,8 @@ class ReplayEngine:
         self._audit         = audit
         self._mode          = mode
         self._speed         = speed
+        self._verifier      = verifier
+        self._correlation   = correlation
         self._lock          = threading.Lock()
 
         # Build a pipeline that routes through the same sessionizer
@@ -233,6 +237,14 @@ class ReplayEngine:
                 if progress_cb and (idx % 50 == 0 or idx == len(sorted_events) - 1):
                     progress_cb(idx + 1, len(sorted_events), raw.get("timestamp", ""))
 
+            # Run cross-session verifier checks and POS correlation
+            for store_id in self._session_store.get_all_store_ids():
+                sessions = self._session_store.get_all_sessions(store_id)
+                if self._verifier:
+                    self._verifier.verify_active_sessions(sessions, store_id)
+                if self._correlation:
+                    self._correlation.correlate(sessions, store_id)
+
             result.mark_done()
             logger.info(
                 "replay_complete source=%s accepted=%d duplicates=%d rejected=%d elapsed=%.2fs",
@@ -255,6 +267,8 @@ class ReplayEngine:
         self._event_store.clear()
         self._session_store.clear()
         self._audit.clear()
+        if self._verifier:
+            self._verifier.clear()
         # Reset sessionizer reentry counts
         if hasattr(self._sessionizer, "_reentry_counts"):
             self._sessionizer._reentry_counts.clear()

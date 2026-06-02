@@ -85,11 +85,18 @@ def black_clothing_score(frame_bgr: np.ndarray,
     # Calculate black ratio for each zone
     zone_ratios = [compute_black_ratio(z) for z in zones]
     
-    # A zone is "dark" if >= 45% of its pixels match the black HSV threshold
-    dark_votes = sum(1 for r in zone_ratios if r >= 0.45)
+    # A zone is "dark" if >= 55% of its pixels match the black HSV threshold
+    # (raised from 45% to reduce false positives on dark-navy/charcoal clothing)
+    dark_votes = sum(1 for r in zone_ratios if r >= 0.55)
+    
+    # Require at least 2 dark zones to score anything (avoids one-zone false triggers)
+    if dark_votes < 2:
+        return 0.0
     
     # Map votes to a continuous confidence score between 0.0 and 1.0
-    score = dark_votes / 5.0
+    # 2 zones = 0.20 (not staff), 3 zones = 0.50, 4 zones = 0.75, 5 zones = 1.0
+    score_map = {2: 0.20, 3: 0.50, 4: 0.75, 5: 1.00}
+    score = score_map.get(dark_votes, dark_votes / 5.0)
     
     return float(np.clip(score, 0.0, 1.0))
 

@@ -51,6 +51,22 @@ def _parse_dt(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
+def _parse_csv_timestamp(row: dict) -> str:
+    if "timestamp" in row:
+        return row["timestamp"].strip()
+    if "order_date" in row and "order_time" in row:
+        date_str = row["order_date"].strip()
+        time_str = row["order_time"].strip()
+        for fmt in ("%d-%m-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M:%S"):
+            try:
+                dt_val = datetime.strptime(f"{date_str} {time_str}", fmt)
+                return dt_val.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+            except ValueError:
+                continue
+    raise ValueError(f"Could not parse timestamp from row: {row}")
+
+
+
 # ---------------------------------------------------------------------------
 # POS Transaction record
 # ---------------------------------------------------------------------------
@@ -99,23 +115,57 @@ class CorrelationEngine:
         """
         Load POS transactions from CSV file.
         Returns number of records loaded.
-        CSV columns: store_id, transaction_id, timestamp, basket_value_inr
+        Supports standard columns: store_id, transaction_id, timestamp, basket_value_inr
+        Or production columns: order_id, order_date, order_time, store_id, total_amount
         """
         loaded = 0
+        seen_txns: Set[str] = set()
         with open(path, newline="", encoding="utf-8") as fh:
             reader = csv.DictReader(fh)
             for row in reader:
+                store_id = row.get("store_id", "").strip()
+                if not store_id and "store_name" in row:
+                    store_id = row["store_name"].strip()
+                
+                txn_id = row.get("transaction_id", "").strip()
+                if not txn_id:
+                    txn_id = row.get("order_id", "").strip() or row.get("invoice_number", "").strip()
+                
+                if not store_id or not txn_id:
+                    continue
+                
+                dedup_key = f"{store_id}:{txn_id}"
+                if dedup_key in seen_txns:
+                    continue
+                
+                try:
+                    ts = _parse_csv_timestamp(row)
+                except Exception as e:
+                    logger.warning("skip_row_invalid_timestamp row=%s error=%s", row, e)
+                    continue
+                
+                val_str = row.get("basket_value_inr", "").strip()
+                if not val_str:
+                    val_str = row.get("total_amount", "").strip() or row.get("NMV", "").strip() or row.get("GMV", "").strip()
+                
+                try:
+                    basket_value = float(val_str) if val_str else 0.0
+                except ValueError:
+                    basket_value = 0.0
+                
                 txn = POSTransaction(
-                    store_id=row["store_id"].strip(),
-                    transaction_id=row["transaction_id"].strip(),
-                    timestamp=row["timestamp"].strip(),
-                    basket_value_inr=float(row.get("basket_value_inr", 0) or 0),
+                    store_id=store_id,
+                    transaction_id=txn_id,
+                    timestamp=ts,
+                    basket_value_inr=basket_value,
                 )
                 with self._lock:
                     if txn.store_id not in self._transactions:
                         self._transactions[txn.store_id] = []
                     self._transactions[txn.store_id].append(txn)
+                seen_txns.add(dedup_key)
                 loaded += 1
+
         # Sort each store's transactions by time
         with self._lock:
             for txns in self._transactions.values():
@@ -230,20 +280,19 @@ class CorrelationEngine:
         Only counts non-staff, closed (exited) sessions.
         Re-entry visitors counted once.
         """
-        # Deduplicate by visitor_id (reentry must not double-count)
-        seen_visitors: Set[str] = set()
-        unique_customers = 0
-        converted_customers = 0
-
+        # Collect conversion status per visitor first (reentry must not double-count)
+        visitor_converted: Dict[str, bool] = {}
         for s in sessions:
             if s.is_staff:
                 continue
-            if s.visitor_id in seen_visitors:
-                continue
-            seen_visitors.add(s.visitor_id)
-            unique_customers += 1
-            if self.is_converted(s.session_id) or s.purchase_candidate:
-                converted_customers += 1
+            is_conv = self.is_converted(s.session_id) or s.purchase_candidate
+            if is_conv:
+                visitor_converted[s.visitor_id] = True
+            else:
+                visitor_converted.setdefault(s.visitor_id, False)
+
+        unique_customers = len(visitor_converted)
+        converted_customers = sum(1 for v in visitor_converted.values() if v)
 
         if unique_customers == 0:
             return 0.0

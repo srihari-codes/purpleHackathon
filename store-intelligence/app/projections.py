@@ -69,20 +69,19 @@ class MetricsProjection:
         customer_sessions = [s for s in sessions if not s.is_staff]
 
         # Unique visitors (visitor_id dedup — reentry must not double count)
-        seen_visitors: Set[str] = set()
-        unique_visitors = 0
-        converted = 0
+        visitor_converted: Dict[str, bool] = {}
         for s in customer_sessions:
-            if s.visitor_id not in seen_visitors:
-                seen_visitors.add(s.visitor_id)
-                unique_visitors += 1
-                is_conv = (
-                    (correlation_engine and correlation_engine.is_converted(s.session_id))
-                    or s.purchase_candidate
-                )
-                if is_conv:
-                    converted += 1
+            is_conv = (
+                (correlation_engine and correlation_engine.is_converted(s.session_id))
+                or s.purchase_candidate
+            )
+            if is_conv:
+                visitor_converted[s.visitor_id] = True
+            else:
+                visitor_converted.setdefault(s.visitor_id, False)
 
+        unique_visitors = len(visitor_converted)
+        converted = sum(1 for v in visitor_converted.values() if v)
         conversion_rate = round(converted / unique_visitors, 4) if unique_visitors else 0.0
 
         # Avg dwell per zone
@@ -105,7 +104,6 @@ class MetricsProjection:
         abandon_sessions = sum(
             1 for s in customer_sessions
             if any(qe.event_type == EventType.BILLING_QUEUE_ABANDON for qe in s.queue_events)
-            and not any(qe.event_type == EventType.BILLING_QUEUE_JOIN for qe in s.queue_events)
         )
         abandonment_rate = round(abandon_sessions / join_sessions, 4) if join_sessions else 0.0
 
@@ -155,22 +153,33 @@ class FunnelProjection:
     ) -> Dict[str, Any]:
         customer_sessions = [s for s in sessions if not s.is_staff]
 
-        # Deduplicate by visitor_id
-        seen: Set[str] = set()
-        unique_sessions: List[VisitorSession] = []
+        # Track stages per visitor across all their sessions to handle re-entry correctly
+        visitor_stages: Dict[str, Dict[str, bool]] = {}
         for s in customer_sessions:
-            if s.visitor_id not in seen:
-                seen.add(s.visitor_id)
-                unique_sessions.append(s)
+            v_id = s.visitor_id
+            if v_id not in visitor_stages:
+                visitor_stages[v_id] = {
+                    "entry": True,
+                    "zone": False,
+                    "billing": False,
+                    "purchase": False,
+                }
+            if s.zones_visited:
+                visitor_stages[v_id]["zone"] = True
+            if s.purchase_candidate:
+                visitor_stages[v_id]["billing"] = True
+            is_conv = (
+                (correlation_engine and correlation_engine.is_converted(s.session_id))
+                or s.purchase_candidate
+            )
+            if is_conv:
+                visitor_stages[v_id]["purchase"] = True
+                visitor_stages[v_id]["billing"] = True  # purchase implies they were at billing
 
-        stage_entry   = len(unique_sessions)
-        stage_zone    = sum(1 for s in unique_sessions if s.zones_visited)
-        stage_billing = sum(1 for s in unique_sessions if s.purchase_candidate)
-        stage_purchase = sum(
-            1 for s in unique_sessions
-            if (correlation_engine and correlation_engine.is_converted(s.session_id))
-            or (not correlation_engine and s.purchase_candidate)
-        )
+        stage_entry = len(visitor_stages)
+        stage_zone = sum(1 for v in visitor_stages.values() if v["zone"])
+        stage_billing = sum(1 for v in visitor_stages.values() if v["billing"])
+        stage_purchase = sum(1 for v in visitor_stages.values() if v["purchase"])
 
         def pct(num: int, denom: int) -> float:
             return round(100.0 * num / denom, 1) if denom else 0.0

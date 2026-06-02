@@ -189,19 +189,31 @@ CAMERA_ZONES: Dict[str, List[Zone]] = {
 
     # -------------------------------------------------------------------------
     # CAM_BILLING_05 — billing counter + queue area
+    #
+    # Layout (right-wall mounted camera looking left into the billing area):
+    #   LEFT side of frame (x < 0.72): customer waiting / queue area
+    #   RIGHT side of frame (x > 0.72): cashier's counter
+    #     The cashier stands BEHIND the counter at the top of the right region.
+    #     Customers approach from the left, not from the right.
+    #
+    # ZONE_BILLING_QUEUE: full customer-facing area — x from 0.05 to 0.72, all y
+    # ZONE_CASH_COUNTER:  STRICT behind-counter space — top-right quadrant only
+    #   (the cashier's feet and body appear in the top-right; customers never go there)
     # -------------------------------------------------------------------------
     "CAM_BILLING_05": [
         Zone("ZONE_BILLING_QUEUE", "BILLING_QUEUE",
              "CAM_BILLING_05",
-             [(0.05, 0.20), (0.70, 0.20), (0.70, 0.95), (0.05, 0.95)],
+             [(0.05, 0.15), (0.72, 0.15), (0.72, 0.98), (0.05, 0.98)],
              (0, 255, 255)),
         Zone("ZONE_CASH_COUNTER", "CASH_COUNTER",
              "CAM_BILLING_05",
-             [(0.70, 0.10), (0.98, 0.10), (0.98, 0.90), (0.70, 0.90)],
+             # Strictly the space BEHIND the counter — upper-right quadrant
+             # where the cashier stands. Customers do not enter this region.
+             [(0.72, 0.05), (0.98, 0.05), (0.98, 0.55), (0.72, 0.55)],
              (255, 128, 0)),
         Zone("ZONE_ACCESSORIES", "ACCESSORIES",
              "CAM_BILLING_05",
-             [(0.05, 0.05), (0.70, 0.20), (0.05, 0.20)],
+             [(0.05, 0.02), (0.72, 0.02), (0.72, 0.15), (0.05, 0.15)],
              (200, 200, 0)),
     ],
 }

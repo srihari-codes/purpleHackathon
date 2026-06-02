@@ -147,19 +147,24 @@ class Sessionizer:
         session_store: SessionStore,
         audit: Optional["AuditTimeline"] = None,
         calibration: Optional["CalibrationEngine"] = None,
+        verifier = None,
     ) -> None:
         self._store         = session_store
         self._audit         = audit
         self._calibration   = calibration
+        self._verifier      = verifier
         # visitor_id → total re-entry count across all time
         self._reentry_counts: Dict[str, int] = defaultdict(int)
-        self._lock          = threading.Lock()
+        self._lock          = threading.RLock()
 
     def set_audit(self, audit: "AuditTimeline") -> None:
         self._audit = audit
 
     def set_calibration(self, calibration: "CalibrationEngine") -> None:
         self._calibration = calibration
+
+    def set_verifier(self, verifier) -> None:
+        self._verifier = verifier
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -172,22 +177,30 @@ class Sessionizer:
         Route event to the appropriate handler based on event_type.
         This is the single entry point from the ingestion pipeline.
         """
-        etype = event.event_type
+        with self._lock:
+            etype = event.event_type
 
-        if etype == EventType.ENTRY:
-            self._handle_entry(event)
-        elif etype == EventType.REENTRY:
-            self._handle_reentry(event)
-        elif etype == EventType.EXIT:
-            self._handle_exit(event)
-        elif etype in (EventType.ZONE_ENTER, EventType.ZONE_EXIT, EventType.ZONE_DWELL):
-            self._handle_zone_event(event)
-        elif etype == EventType.BILLING_QUEUE_JOIN:
-            self._handle_queue_join(event)
-        elif etype == EventType.BILLING_QUEUE_ABANDON:
-            self._handle_queue_abandon(event)
-        else:
-            logger.warning("sessionizer_unhandled_event_type type=%s", etype)
+            if etype == EventType.ENTRY:
+                self._handle_entry(event)
+            elif etype == EventType.REENTRY:
+                self._handle_reentry(event)
+            elif etype == EventType.EXIT:
+                self._handle_exit(event)
+            elif etype in (EventType.ZONE_ENTER, EventType.ZONE_EXIT, EventType.ZONE_DWELL):
+                self._handle_zone_event(event)
+            elif etype == EventType.BILLING_QUEUE_JOIN:
+                self._handle_queue_join(event)
+            elif etype == EventType.BILLING_QUEUE_ABANDON:
+                self._handle_queue_abandon(event)
+            else:
+                logger.warning("sessionizer_unhandled_event_type type=%s", etype)
+
+            if self._verifier is not None:
+                session = self._store.get_active(event.visitor_id)
+                try:
+                    self._verifier.verify_event(event, session)
+                except Exception as exc:
+                    logger.error("verifier_error event_id=%s: %s", event.event_id, exc, exc_info=True)
 
     # ── event handlers ────────────────────────────────────────────────────
 

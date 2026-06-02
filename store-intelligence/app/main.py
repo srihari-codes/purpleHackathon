@@ -82,10 +82,12 @@ _correlation  = CorrelationEngine()
 _replay       = ReplayEngine(
     _event_store, _sess_store, _sessionizer, _audit,
     mode=ReplayMode.LIVE, speed=0.0,
+    verifier=_verifier, correlation=_correlation,
 )
 
 # Wire verifier into sessionizer post-processing
 _sessionizer.set_audit(_audit)
+_sessionizer.set_verifier(_verifier)
 
 
 # ---------------------------------------------------------------------------
