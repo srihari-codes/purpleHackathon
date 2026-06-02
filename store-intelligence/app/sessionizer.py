@@ -34,7 +34,7 @@ import threading
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from .models import (
     EventType,
@@ -42,6 +42,10 @@ from .models import (
     QueueEvent,
     VisitorSession,
 )
+
+if TYPE_CHECKING:
+    from .audit import AuditTimeline
+    from .calibration import CalibrationEngine
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +136,30 @@ class Sessionizer:
     One Sessionizer instance is shared across the API lifetime.
     It wraps a SessionStore and exposes process_event() for the ingestion
     pipeline to call after each accepted event.
+
+    Optional integrations (injected after construction):
+        audit       — AuditTimeline: records every state change with explanations
+        calibration — CalibrationEngine: feeds observations for threshold tuning
     """
 
-    def __init__(self, session_store: SessionStore) -> None:
+    def __init__(
+        self,
+        session_store: SessionStore,
+        audit: Optional["AuditTimeline"] = None,
+        calibration: Optional["CalibrationEngine"] = None,
+    ) -> None:
         self._store         = session_store
+        self._audit         = audit
+        self._calibration   = calibration
         # visitor_id → total re-entry count across all time
         self._reentry_counts: Dict[str, int] = defaultdict(int)
         self._lock          = threading.Lock()
+
+    def set_audit(self, audit: "AuditTimeline") -> None:
+        self._audit = audit
+
+    def set_calibration(self, calibration: "CalibrationEngine") -> None:
+        self._calibration = calibration
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -202,6 +223,22 @@ class Sessionizer:
             visitor_id, session.session_id, event.is_staff,
         )
 
+        # Audit
+        if self._audit:
+            self._audit.record_detection(
+                visitor_id, event.event_type.value, event.timestamp,
+                event.confidence, event.camera_id, session_id=session.session_id,
+            )
+            self._audit.record_session_open(
+                visitor_id, session.session_id, event.store_id,
+                event.timestamp, event.confidence, event.is_staff,
+            )
+        # Calibration
+        if self._calibration:
+            self._calibration.observe_event(
+                event.store_id, event.camera_id, event.confidence
+            )
+
     def _handle_reentry(self, event: InboundEvent) -> None:
         """
         REENTRY → continue visitor history.
@@ -212,6 +249,7 @@ class Sessionizer:
         - is_staff propagates from the event.
         """
         visitor_id = event.visitor_id
+        reid_score = event.metadata.reid_score if event.metadata else None
 
         with self._lock:
             self._reentry_counts[visitor_id] += 1
@@ -243,6 +281,17 @@ class Sessionizer:
                 visitor_id, count, session.session_id,
             )
 
+        # Audit
+        if self._audit:
+            self._audit.record_reentry(
+                visitor_id, session.session_id, event.timestamp,
+                event.confidence, count, reid_score=reid_score,
+                camera_id=event.camera_id,
+            )
+        # Calibration: reid observations help tune reid_confidence_threshold
+        if self._calibration and reid_score is not None:
+            self._calibration.observe_reid(event.store_id, reid_score)
+
     def _handle_exit(self, event: InboundEvent) -> None:
         """EXIT → close the active session."""
         visitor_id = event.visitor_id
@@ -266,7 +315,19 @@ class Sessionizer:
 
         self._update_avg_confidence(session, event.confidence)
         session.event_count += 1
-        self._store.close_session(visitor_id, event.timestamp)
+        closed = self._store.close_session(visitor_id, event.timestamp)
+
+        # Audit
+        if self._audit and closed:
+            self._audit.record_session_close(
+                visitor_id, closed.session_id, event.timestamp,
+                event.confidence, closed.duration_ms,
+            )
+        # Calibration
+        if self._calibration:
+            self._calibration.observe_event(
+                event.store_id, event.camera_id, event.confidence
+            )
 
     def _handle_zone_event(self, event: InboundEvent) -> None:
         """ZONE_ENTER / ZONE_EXIT / ZONE_DWELL → enrich zone data on session."""
@@ -286,6 +347,17 @@ class Sessionizer:
 
         self._update_avg_confidence(session, event.confidence)
         session.event_count += 1
+
+        # Audit
+        if self._audit:
+            self._audit.record_zone(
+                event.visitor_id, session.session_id,
+                event.event_type.value, event.timestamp,
+                event.confidence, zone_id, event.dwell_ms,
+            )
+        # Calibration: feed zone dwell observations
+        if self._calibration and event.dwell_ms > 0:
+            self._calibration.observe_zone_dwell(event.store_id, float(event.dwell_ms))
 
     def _handle_queue_join(self, event: InboundEvent) -> None:
         """BILLING_QUEUE_JOIN → record queue event; flag purchase_candidate."""
@@ -312,16 +384,30 @@ class Sessionizer:
             event.visitor_id, session.session_id, event.metadata.queue_depth,
         )
 
+        # Audit
+        if self._audit:
+            self._audit.record_queue(
+                event.visitor_id, session.session_id,
+                event.event_type.value, event.timestamp, event.confidence,
+                queue_depth=event.metadata.queue_depth,
+            )
+        # Calibration: queue dwell observations
+        if self._calibration and event.dwell_ms > 0:
+            self._calibration.observe_queue_dwell(
+                event.store_id, event.dwell_ms / 1000.0
+            )
+
     def _handle_queue_abandon(self, event: InboundEvent) -> None:
         """BILLING_QUEUE_ABANDON → record abandon event."""
         session = self._get_or_create_session(event)
         if session is None:
             return
 
+        wait_ms = event.metadata.wait_duration_ms or event.dwell_ms or None
         qe = QueueEvent(
             event_type = EventType.BILLING_QUEUE_ABANDON,
             timestamp  = event.timestamp,
-            wait_ms    = event.metadata.wait_duration_ms or event.dwell_ms or None,
+            wait_ms    = wait_ms,
         )
         session.queue_events.append(qe)
 
@@ -331,6 +417,19 @@ class Sessionizer:
             "queue_abandon visitor=%s session=%s",
             event.visitor_id, session.session_id,
         )
+
+        # Audit
+        if self._audit:
+            self._audit.record_queue(
+                event.visitor_id, session.session_id,
+                event.event_type.value, event.timestamp, event.confidence,
+                wait_ms=wait_ms,
+            )
+        # Calibration: queue dwell observation
+        if self._calibration and wait_ms:
+            self._calibration.observe_queue_dwell(
+                event.store_id, wait_ms / 1000.0
+            )
 
     # ── internal helpers ──────────────────────────────────────────────────
 
@@ -376,13 +475,20 @@ class Sessionizer:
 # Factory helper (used by app/main.py to wire everything together)
 # ---------------------------------------------------------------------------
 
-def build_session_pipeline() -> tuple[SessionStore, Sessionizer]:
+def build_session_pipeline(
+    audit: Optional["AuditTimeline"] = None,
+    calibration: Optional["CalibrationEngine"] = None,
+) -> tuple[SessionStore, Sessionizer]:
     """
     Create a ready-to-use SessionStore + Sessionizer pair.
+
+    Args:
+        audit       — AuditTimeline instance (optional; enables full audit recording)
+        calibration — CalibrationEngine instance (optional; enables threshold tuning)
 
     Returns:
         (session_store, sessionizer)
     """
-    store      = SessionStore()
-    sessionizer = Sessionizer(store)
+    store       = SessionStore()
+    sessionizer = Sessionizer(store, audit=audit, calibration=calibration)
     return store, sessionizer
