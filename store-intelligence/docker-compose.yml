@@ -102,3 +102,26 @@ services:
       - "8081:8081"
     restart: "no"
     entrypoint: ["python3", "/app/pipeline/calibrate_zones.py", "--clips_dir", "/data/clips", "--port", "8081"]
+
+  # ── Store Intelligence API ────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: store_intelligence_api
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+      - ./app:/api/app:ro
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      POS_CSV: /data/pos_transactions.csv
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
