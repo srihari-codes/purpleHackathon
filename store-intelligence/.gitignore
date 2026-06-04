@@ -136,14 +136,18 @@ ehthumbs.db
 Thumbs.db
 
 # Project-specific local files
-data/events.jsonl
-data/events_purplle.jsonl
-data/warnings.jsonl
-data/si_session/
-data/test_clips/
-data/clips/
+# Ignore data directories
+/data/*
+/data/si_session/*
+
+# But track these files
+!/data/warnings.jsonl
+!/data/events_purplle.jsonl
+!/data/events.jsonl
+!/data/si_session/events.jsonl
+!/data/si_session/warnings.jsonl
 yolo*.pt
-*.jsonl
+
 
 #virtual environment
 venv/*

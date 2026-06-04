@@ -1,8 +1,0 @@
-*.zip
-*.pdf
-*.env
-/cctv_raw
-/__pycache__
-*.mp4
-*.jsonl
-events.jsonl
