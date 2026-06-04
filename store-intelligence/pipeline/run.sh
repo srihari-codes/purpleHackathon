@@ -18,7 +18,7 @@ set -euo pipefail
 
 CLIPS_DIR="${CLIPS_DIR:-/data/clips}"
 OUTPUT="${OUTPUT:-/data/events.jsonl}"
-STORE_ID="${STORE_ID:-STORE_BLR_002}"
+STORE_ID="${STORE_ID:-}"
 GUI_PORT="${GUI_PORT:-8080}"
 SPEED="${SPEED:-1.0}"
 LOG_LEVEL="${LOG_LEVEL:-INFO}"

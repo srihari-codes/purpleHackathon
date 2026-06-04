@@ -22,7 +22,7 @@
 
 # ── Shared base config ────────────────────────────────────────────────────────
 x-pipeline-env: &pipeline-env
-  STORE_ID: ${STORE_ID:?STORE_ID must be set (e.g. STORE_ID=MY_STORE docker compose up)}
+  STORE_ID: ${STORE_ID:-}
   CLIPS_DIR: ${CLIPS_DIR:-/data/clips}
   OUTPUT: ${OUTPUT:-/data/events.jsonl}
   CAMERA_MAP: ${CAMERA_MAP:-{}}

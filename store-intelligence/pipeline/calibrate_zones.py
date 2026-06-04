@@ -199,12 +199,22 @@ def main():
     p.add_argument("--port", type=int, default=8081)
     args = p.parse_args()
 
-    if not args.store_id:
-        p.error("--store_id is required (or set STORE_ID env var)")
+    session_file = Path("/data/si_session/session.json")
+    resolved_store_id = args.store_id
+    if not resolved_store_id and session_file.exists():
+        try:
+            with open(session_file) as f:
+                sess_data = json.load(f)
+            resolved_store_id = sess_data.get("store_id", "")
+        except Exception:
+            pass
+
+    if not resolved_store_id:
+        resolved_store_id = "STORE_DEMO"
 
     import uvicorn
-    app = make_app(store_id=args.store_id, clips_dir=args.clips_dir)
-    print(f"\n  Zone Calibration Studio [{args.store_id}] → http://localhost:{args.port}\n")
+    app = make_app(store_id=resolved_store_id, clips_dir=args.clips_dir)
+    print(f"\n  Zone Calibration Studio [{resolved_store_id}] → http://localhost:{args.port}\n")
     uvicorn.run(app, host="0.0.0.0", port=args.port)
 
 

@@ -600,11 +600,22 @@ class CameraProcessor:
             # -------------------------------------------------------
             # BILLING QUEUE (Camera 5 only)
             # -------------------------------------------------------
-            # IMPORTANT: Only count visitors in ZONE_BILLING_QUEUE (customer side).
+            # IMPORTANT: Only count visitors in ZONE_BILLING_QUEUE, QUEUE_AREA, or dynamic queue zone ID.
             # ZONE_CASH_COUNTER is the cashier's side — staff stand there.
             # Anyone in ZONE_CASH_COUNTER is NOT a customer in queue.
-            if (self.queue_tracker is not None and
-                    zone_id == "ZONE_BILLING_QUEUE" and not is_staff):
+            is_queue_zone = False
+            if zone_id in ("ZONE_BILLING_QUEUE", "QUEUE_AREA"):
+                is_queue_zone = True
+            else:
+                try:
+                    from zone_mapper import get_mapper
+                    mapped_q_id = get_mapper(self.emitter.store_id).get_queue_zone_id(self.camera_id)
+                    if mapped_q_id and zone_id == mapped_q_id:
+                        is_queue_zone = True
+                except Exception:
+                    pass
+
+            if (self.queue_tracker is not None and is_queue_zone and not is_staff):
                 seq = self.identity_mgr.get_session_seq(visitor_id)
                 billing_present.append((visitor_id, is_staff, conf, seq))
 
@@ -1136,9 +1147,6 @@ def main():
     args = parser.parse_args()
     logging.getLogger().setLevel(getattr(logging, args.log_level.upper(), logging.INFO))
 
-    if not args.store_id:
-        parser.error("--store_id is required (or set STORE_ID env var)")
-
     try:
         camera_file_map = _json.loads(args.camera_map) if args.camera_map else {}
     except Exception as e:
@@ -1166,6 +1174,9 @@ def main():
         except KeyboardInterrupt:
             logger.info("Stopping Wizard server...")
         return
+
+    if not args.store_id:
+        parser.error("--store_id is required (or set STORE_ID env var)")
 
     run_pipeline(
         store_id=args.store_id,
