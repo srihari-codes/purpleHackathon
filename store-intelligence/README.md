@@ -8,7 +8,9 @@
 
 ## What This Is
 
-A complete retail intelligence platform built from scratch: drop in CCTV clips, get a live analytics dashboard with real-time annotated video, queue depth tracking, entry/exit counts, zone heatmaps, conversion funnels, and a production-grade REST API.
+A complete, fully dynamic retail intelligence platform built from scratch: drop in CCTV clips, get a live analytics dashboard with real-time annotated video, queue depth tracking, entry/exit counts, zone heatmaps, conversion funnels, and a production-grade REST API.
+
+The system is **fully dynamic**: there are no static files to configure, no hardcoded store IDs, and no service restarts required. Adding a new store, registering sequentially assigned camera slots, drawing region shapes, and setting up line-crossing boundaries are all handled dynamically through the web UI and immediately hot-reloaded by the background containers.
 
 **Stack:**
 | Layer | Technology |

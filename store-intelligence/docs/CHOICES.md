@@ -1,6 +1,8 @@
 # Store Intelligence — Architectural Choices
 
 > Every decision documented here was made under real constraints: a single CCTV feed that runs at 15fps, faces blurred for privacy, a billing queue that actually builds and disperses, and a hard requirement that `docker compose up` is the only setup step. The reasoning below is exactly how I thought through each one.
+> 
+> **Fully Dynamic Operation:** The entire Store Intelligence system is designed to be completely dynamic. There are no compiled stores, hardcoded camera maps, or fixed camera role boundaries. Everything is designed to adapt to runtime conditions: the wizard registers new stores and sequentially creates camera slots on the fly; the calibration studio saves zone geometries that are dynamically loaded; and the API handles metrics and funnel steps for newly introduced stores automatically.
 
 ---
 

@@ -4,6 +4,8 @@
 
 Store Intelligence converts raw CCTV footage into a live retail analytics platform. The system is built across four tightly-coupled stages — detection, event stream, intelligence API, and live dashboard — with a fifth layer: a browser-based onboarding wizard that makes the entire pipeline zero-configuration from a clean start.
 
+Store Intelligence is designed as a **fully dynamic, runtime-adaptive analytics platform**. Rather than compiling configurations, hardcoding mapping tables, or requiring manual container/service restarts when adding cameras or changing layout parameters, the entire system resolves all constraints dynamically. The onboarding wizard allows configuring stores, camera counts, role definitions, and video clips live. The calibration studio writes shapes directly to `/data/calibration/{STORE_ID}.json`, which the pipeline's `ZoneMapper` watches and hot-reloads dynamically in real time without dropping camera streams.
+
 **North-star metric: Offline Store Conversion Rate = Visitors who purchased ÷ Total unique visitors**
 
 Every architectural decision connects back to this number.
@@ -78,6 +80,66 @@ Every architectural decision connects back to this number.
                                │  Save → calibration JSON  │
                                └───────────────────────────┘
 ```
+
+---
+
+## End-to-End Pipeline & Workflow Detail
+
+This section traces the path of raw pixels and events through our five-stage, zero-configuration pipeline. It illustrates how the system converts unorganized CCTV clips and POS transactions into clean, actionable retail metrics while satisfying the requirements of the challenge.
+
+### 1. Dynamic Setup & Stream Initialization (Zero-Config Onboarding)
+The lifecycle begins when the user accesses the Onboarding Wizard SPA at `http://localhost:8080`.
+* **State Registration:** The user enters the store name and code. The backend writes this information to `/data/si_session/session.json`, establishing a unique `STORE_ID` (e.g., `ST_ANDHERI`).
+* **Slot Provisioning:** As CCTV clips are uploaded, the backend dynamically registers camera slots (e.g., `CAM_ENTRY_01`, `CAM_BILLING_01`, `CAM_FLOOR_01`). It extracts preview frames from the first frame of each video.
+* **Dynamic Calibration:** The user launches the Calibration Studio (`:8081`). Using the canvas overlay, they draw polygon shapes representing regions (`zone`, `queue_area`, `staff_area`) and a two-point line vector (`entry_line`). On save, the coordinates are written to `/data/calibration/{STORE_ID}.json`. The pipeline's `ZoneMapper` watches this directory and instantly hot-reloads these configuration files without needing a service restart.
+
+```mermaid
+sequenceDiagram
+    participant User as Web Browser (SPA)
+    participant Backend as Onboarding Wizard (:8080)
+    participant Calib as Calibration Studio (:8081)
+    participant Pipeline as Detection Pipeline (detect.py)
+
+    User->>Backend: 1. POST /api/setup (Store info)
+    User->>Backend: 2. POST /api/camera/{id}/upload (CCTV upload)
+    User->>Calib: 3. Draw zones & Entry Line (╱ Entry Line mode)
+    Calib->>Backend: 4. Save JSON to /data/calibration/{STORE_ID}.json
+    Backend->>Pipeline: 5. POST /api/analysis/start
+    Note over Pipeline: ZoneMapper detects JSON changes<br/>Hot-reloads geometry in-memory
+```
+
+### 2. Deep Vision & Multi-Signal Tracking (Detection Layer)
+When the analysis is triggered, the background daemon invokes `run_pipeline()`, spinning up a `CameraProcessor` thread for each camera.
+* **Inference & Bounding Boxes:** Frames are read from the video files. The processor passes each frame to YOLO11m to detect the `person` class. Bounding boxes are handed to ByteTrack to manage frame-to-frame association.
+* **Visitor Identity Manager:** To solve the core retail problem—frequent occlusion behind tall displays and track fragmentation—the `VisitorIdentityManager` aggregates local tracks into a persistent, global `visitor_id` using a custom **8-Signal Consensus Re-ID** algorithm. The engine scores spatial proximity, Kalman trajectory predictions, velocity shadow tracks, temporal gaps, and HSV appearance histograms to resolve identity matches in real time.
+* **Staff Filtering:** Crops of the bounding boxes are evaluated by the `StaffTracker` using HSV black-clothing detection and checked against designated `staff_area` polygons. If a track's centroid falls inside a staff zone, or black clothing is consistently detected across frames, the visitor is classified with `is_staff = true` to prevent cashier tracks from corrupting customer statistics.
+* **Line-Crossing & Zone Occupancy:** Centroids are mapped against the normalized calibration coordinates:
+  - Crossing the calibrated two-point `entry_line` triggers `ENTRY` / `EXIT` events based on half-plane math.
+  - Occupying a `zone` polygon registers a `ZONE_ENTER` event, accumulates dwell time, and triggers `ZONE_DWELL` every 30 seconds.
+  - Entering a `queue_area` (or `billing_counter` shape) logs a `BILLING_QUEUE_JOIN` event, incrementing the live queue depth count.
+
+### 3. Structured Event Generation & Stream
+As the detection layer identifies actions, it formats them into structured events.
+* **Confidence Lineage:** Each event carries a `confidence` field calculated using a mathematical lineage:
+  $$\text{final\_confidence} = \text{det\_conf} \times \text{track\_conf} \times \text{reid\_conf} \times \text{zone\_conf}$$
+  This captures accuracy at every stage (detection precision, tracking overlap, Re-ID consensus strength, and zone intersection confidence).
+* **Line-Buffered Serialization:** The `EventEmitter` assigns a unique event UUID-v4, verifies schema constraints, and writes the event as a JSON line to `events.jsonl` on disk. Simultaneously, it sends the event to the GUI server's WebSocket queue and POSTs the batch to the Intelligence API.
+
+### 4. Real-time API Ingestion & Sessionization
+The Intelligence API (`:8000`) ingests events in batches.
+* **Idempotency & Type Validation:** The FastAPI endpoint uses strict Pydantic models to validate type safety. An in-memory index (`EventStore._seen_ids`) ensures that duplicate event IDs are suppressed, returning `duplicates = 1`.
+* **Visitor State Machine (FSM):** Events are sessionized in the `SessionStore`. A per-visitor state machine tracks the customer's lifecycle (`ENTERED → BROWSING → DWELLING → QUEUEING → EXITED`). A `REENTRY` event reopens an existing visitor's session rather than creating a new one, keeping unique visitor counts accurate.
+* **Sliding Window POS Correlation:** The API parses POS transaction files (supporting standard and Purplle production schemas). The `CorrelationEngine` correlates billing-queue dwells with POS records: a session is marked converted if the visitor was in the queue within a 5-minute window preceding a POS transaction timestamp.
+* **Verifier & Anomaly Engine:** Ingested events are continuously checked by the `VerifierEngine` for integrity violations (e.g., negative queue depths, fast re-entries, or drastic confidence drops). Violations trigger warning metrics.
+
+### 5. Live Dashboard & Analytical Projections
+The user monitors store performance on the live single-page dashboard.
+* **Real-time Streaming:** The GUI server broadcasts base64 JPEGs and JSON events over WebSockets. The dashboard updates live image tags, appends logs, and increments active metrics.
+* **Dynamic Projections:** Business analysts hit the query endpoints, which compute metrics on-demand from the in-memory session registry:
+  - `GET /metrics` -> Calculates conversion rate, visitor counts, queue metrics, and abandonment rates.
+  - `GET /funnel` -> Measures conversion progress (Entry -> Browsing -> Queue -> Purchase) and drop-offs.
+  - `GET /heatmap` -> Maps spatial visitation counts and dwell averages across calibrated zones.
+  - `GET /anomalies` -> Identifies queue spikes, conversion dips, dead zones, and integrity alerts.
 
 ---
 
