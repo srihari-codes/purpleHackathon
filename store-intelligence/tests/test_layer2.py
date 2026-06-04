@@ -1,3 +1,47 @@
+# PROMPT:
+#   Generate a comprehensive pytest test suite for a retail store analytics FastAPI application
+#   that processes CCTV detection events. The system: (1) ingests batches of structured events
+#   (ENTRY, EXIT, ZONE_ENTER, ZONE_EXIT, ZONE_DWELL, BILLING_QUEUE_JOIN, BILLING_QUEUE_ABANDON,
+#   REENTRY) via POST /events/ingest, (2) sessionises visitors — deduplicating re-entries so the
+#   same physical person is never double-counted as a unique visitor, (3) correlates visitor
+#   billing-zone dwell with POS transactions to compute conversion rate, (4) exposes
+#   GET /stores/{id}/metrics, /funnel, /heatmap, /anomalies, and /health endpoints.
+#   Tests must cover: event validation (malformed timestamps, empty visitor_id, future timestamps,
+#   confidence out-of-range), idempotent ingest (same event_id twice → accepted=1/duplicates=1),
+#   partial success on mixed valid/invalid batch, session lifecycle (ENTRY→ZONE_ENTER→ZONE_DWELL→
+#   BILLING_QUEUE_JOIN→EXIT), out-of-order session creation (ZONE_ENTER before ENTRY),
+#   re-entry handling (ENTRY→EXIT→REENTRY), calibration engine rolling window, verifier engine
+#   violations (QUEUE_DEPTH_NEGATIVE, CONFIDENCE_CLIFF, REENTRY_TOO_FAST,
+#   DUPLICATE_ACTIVE_SESSION), replay engine reproducibility, POS correlation (5-minute window),
+#   funnel projection, full API integration flow, and edge cases: empty store → 404, all-staff
+#   clip → 0 unique visitors, zero purchases → 0.0 conversion rate, re-entry funnel dedup,
+#   abandonment rate, verifier during sessionisation, replay + verifier consistency, and
+#   Purplle-specific production CSV format with non-standard column headers.
+#
+# CHANGES MADE:
+#   1. Hardened the timestamp validation test to assert the exact error message substring
+#      ("not a valid ISO-8601 datetime") rather than a generic ValueError, catching regressions
+#      in the Pydantic validator message format.
+#   2. Added `test_brigade_bangalore_csv_format` — the AI generated only a generic CSV test;
+#      replaced it with the actual Purplle production column schema (order_id, coupon_code,
+#      offer_name, GMV, NMV, total_amount, etc.) to validate the production parser path.
+#   3. Added `test_visitor_centric_conversion_and_funnel_reentry` — the AI's funnel test only
+#      checked single-session visitors; this test verifies that a visitor who re-enters and joins
+#      the billing queue in their second session is counted as 1 unique converted visitor, not 2.
+#   4. Added `test_abandonment_rate_multiple_events` — the AI omitted BILLING_QUEUE_ABANDON
+#      as a standalone edge case; added explicit test with join + abandon in same session and
+#      assertion that abandonment_rate == 1.0.
+#   5. Added `test_event_verifier_triggered_during_sessionization` — the AI generated verifier
+#      unit tests but did not test that verifier warnings are produced during the full API ingest
+#      flow; added end-to-end check via POST /events/ingest with a negative queue_depth event.
+#   6. Added `test_replay_engine_verifier_and_correlation_consistency` — the AI missed the
+#      POST /stores/{id}/replay endpoint integration test; added to verify that the replay engine
+#      correctly surfaces verifier warnings and that /metrics responds correctly after a replay.
+#   7. Removed AI-generated happy-path-only heatmap test that asserted `zones` was non-empty
+#      for a single session — with < 20 sessions data_confidence is False and the zone list
+#      may be empty if no ZONE_ENTER events were ingested; replaced with the data_confidence
+#      flag assertion in `test_api_full_flow`.
+
 import os
 import json
 import uuid
