@@ -1,0 +1,604 @@
+{
+  "store_id": "STORE_BLR_002",
+  "version": "v1",
+  "updated_at": "2026-06-02T18:51:16.385312Z",
+  "cameras": {
+    "CAM_FLOOR_01": {
+      "shapes": [
+        {
+          "shape_id": "ZONE_EB",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "EB",
+          "points": [
+            [
+              0.02,
+              0.02
+            ],
+            [
+              0.22,
+              0.02
+            ],
+            [
+              0.22,
+              0.22
+            ],
+            [
+              0.02,
+              0.22
+            ]
+          ],
+          "color": "#0064C8",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_TFS",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "TFS",
+          "points": [
+            [
+              0.22,
+              0.02
+            ],
+            [
+              0.42,
+              0.02
+            ],
+            [
+              0.42,
+              0.22
+            ],
+            [
+              0.22,
+              0.22
+            ]
+          ],
+          "color": "#0078B4",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_FRAGRANCE",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "FRAGRANCE",
+          "points": [
+            [
+              0.05,
+              0.35
+            ],
+            [
+              0.28,
+              0.35
+            ],
+            [
+              0.28,
+              0.65
+            ],
+            [
+              0.05,
+              0.65
+            ]
+          ],
+          "color": "#B46400",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_NAIL",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "NAIL",
+          "points": [
+            [
+              0.28,
+              0.35
+            ],
+            [
+              0.48,
+              0.35
+            ],
+            [
+              0.48,
+              0.65
+            ],
+            [
+              0.28,
+              0.65
+            ]
+          ],
+          "color": "#A05014",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_FOH",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "FOH",
+          "points": [
+            [
+              0.48,
+              0.3
+            ],
+            [
+              0.8,
+              0.3
+            ],
+            [
+              0.8,
+              0.7
+            ],
+            [
+              0.48,
+              0.7
+            ]
+          ],
+          "color": "#C83232",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_FACES",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "FACES",
+          "points": [
+            [
+              0.02,
+              0.75
+            ],
+            [
+              0.28,
+              0.75
+            ],
+            [
+              0.28,
+              0.98
+            ],
+            [
+              0.02,
+              0.98
+            ]
+          ],
+          "color": "#0064C8",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_SWISS_PLUS",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "SWISS_PLUS",
+          "points": [
+            [
+              0.38,
+              0.75
+            ],
+            [
+              0.6,
+              0.75
+            ],
+            [
+              0.6,
+              0.98
+            ],
+            [
+              0.38,
+              0.98
+            ]
+          ],
+          "color": "#0050DC",
+          "enabled": true
+        }
+      ]
+    },
+    "CAM_FLOOR_02": {
+      "shapes": [
+        {
+          "shape_id": "ZONE_MINIMALIST",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "MINIMALIST",
+          "points": [
+            [
+              0.05,
+              0.02
+            ],
+            [
+              0.25,
+              0.02
+            ],
+            [
+              0.25,
+              0.22
+            ],
+            [
+              0.05,
+              0.22
+            ]
+          ],
+          "color": "#64C800",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_AQUALOGICA",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "AQUALOGICA",
+          "points": [
+            [
+              0.25,
+              0.02
+            ],
+            [
+              0.45,
+              0.02
+            ],
+            [
+              0.45,
+              0.22
+            ],
+            [
+              0.25,
+              0.22
+            ]
+          ],
+          "color": "#50B414",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_PILGRIM",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "PILGRIM",
+          "points": [
+            [
+              0.45,
+              0.02
+            ],
+            [
+              0.65,
+              0.02
+            ],
+            [
+              0.65,
+              0.22
+            ],
+            [
+              0.45,
+              0.22
+            ]
+          ],
+          "color": "#3CA028",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_DK",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "D_AND_K",
+          "points": [
+            [
+              0.65,
+              0.02
+            ],
+            [
+              0.88,
+              0.02
+            ],
+            [
+              0.88,
+              0.22
+            ],
+            [
+              0.65,
+              0.22
+            ]
+          ],
+          "color": "#288C3C",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_MAKEUP",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "MAKEUP_UNIT",
+          "points": [
+            [
+              0.3,
+              0.3
+            ],
+            [
+              0.75,
+              0.3
+            ],
+            [
+              0.75,
+              0.7
+            ],
+            [
+              0.3,
+              0.7
+            ]
+          ],
+          "color": "#C80096",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_MARS_NYBAE",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "MARS_NYBAE",
+          "points": [
+            [
+              0.38,
+              0.75
+            ],
+            [
+              0.58,
+              0.75
+            ],
+            [
+              0.58,
+              0.98
+            ],
+            [
+              0.38,
+              0.98
+            ]
+          ],
+          "color": "#003CC8",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_LOREAL",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "LOREAL",
+          "points": [
+            [
+              0.58,
+              0.75
+            ],
+            [
+              0.75,
+              0.75
+            ],
+            [
+              0.75,
+              0.98
+            ],
+            [
+              0.58,
+              0.98
+            ]
+          ],
+          "color": "#0028DC",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_BEAUTY",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "BEAUTY",
+          "points": [
+            [
+              0.75,
+              0.75
+            ],
+            [
+              0.95,
+              0.75
+            ],
+            [
+              0.95,
+              0.98
+            ],
+            [
+              0.75,
+              0.98
+            ]
+          ],
+          "color": "#1414F0",
+          "enabled": true
+        }
+      ]
+    },
+    "CAM_ENTRY_03": {
+      "shapes": [
+        {
+          "shape_id": "ENTRY_LINE",
+          "shape_type": "line",
+          "role": "entry_line",
+          "label": "ENTRY_DOOR",
+          "points": [
+            [
+              0.3283549334672689,
+              1
+            ],
+            [
+              0.7043189337445491,
+              0.2543829145175599
+            ]
+          ],
+          "color": "#FF0033",
+          "enabled": true,
+          "meta": {
+            "inside_is": "below"
+          }
+        },
+        {
+          "shape_id": "ZONE_ENTRANCE",
+          "shape_type": "polygon",
+          "role": "zone",
+          "label": "INSIDE_STORE",
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              0.7371303374051118,
+              0
+            ],
+            [
+              0.690647515552648,
+              0.24952196582710615
+            ],
+            [
+              0.4568662644711392,
+              0.7210339888011175
+            ],
+            [
+              0.31058208981779745,
+              1
+            ],
+            [
+              0,
+              1
+            ]
+          ],
+          "color": "#A855F7",
+          "enabled": true
+        },
+        {
+          "shape_id": "ZONE_OUTSIDE",
+          "shape_type": "polygon",
+          "role": "outside_region",
+          "label": "OUTSIDE_STORE",
+          "points": [
+            [
+              0.7179903519364502,
+              0.25681338886278676
+            ],
+            [
+              0.7576374646929634,
+              0
+            ],
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              1
+            ],
+            [
+              0.6510004027961348,
+              1
+            ],
+            [
+              0.34202635165917,
+              1
+            ]
+          ],
+          "color": "#f75555",
+          "enabled": true
+        }
+      ]
+    },
+    "CAM_GODOWN_04": {
+      "shapes": [
+        {
+          "shape_id": "ZONE_STAFF_AREA",
+          "shape_type": "polygon",
+          "role": "staff_area",
+          "label": "STAFF_AREA",
+          "points": [
+            [
+              0.05,
+              0.05
+            ],
+            [
+              0.95,
+              0.05
+            ],
+            [
+              0.95,
+              0.95
+            ],
+            [
+              0.05,
+              0.95
+            ]
+          ],
+          "color": "#808080",
+          "enabled": true
+        }
+      ]
+    },
+    "CAM_BILLING_05": {
+      "shapes": [
+        {
+          "shape_id": "QUEUE_AREA",
+          "shape_type": "polygon",
+          "role": "queue_area",
+          "label": "BILLING_QUEUE",
+          "points": [
+            [
+              0.13154833741857314,
+              0.20998912690882304
+            ],
+            [
+              0,
+              0.18964918602296096
+            ],
+            [
+              0,
+              1
+            ],
+            [
+              0.2102067025631179,
+              1
+            ],
+            [
+              0.11295636020258981,
+              0.7312001121090389
+            ],
+            [
+              0.10866590392197828,
+              0.5811930480758062
+            ]
+          ],
+          "color": "#A855F7",
+          "enabled": true
+        },
+        {
+          "shape_id": "BILLING_COUNTER",
+          "shape_type": "polygon",
+          "role": "billing_counter",
+          "label": "BILLING_COUNTER",
+          "points": [
+            [
+              0.2931555239882742,
+              0.24049903823761618
+            ],
+            [
+              0.5920573115375445,
+              0.46932337320356465
+            ],
+            [
+              0.5877668552569328,
+              0.677807767283651
+            ],
+            [
+              0.556303509199115,
+              0.687977737726582
+            ],
+            [
+              0.5448622924508175,
+              1
+            ],
+            [
+              0.3618028244780588,
+              0.9930768510145133
+            ],
+            [
+              0.15014031463455643,
+              0.6396703781226596
+            ]
+          ],
+          "color": "#55f785",
+          "enabled": true
+        }
+      ]
+    }
+  }
+}

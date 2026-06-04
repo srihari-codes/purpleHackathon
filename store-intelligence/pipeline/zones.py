@@ -220,7 +220,16 @@ CAMERA_ZONES: Dict[str, List[Zone]] = {
 
 
 def get_zones_for_camera(camera_id: str) -> List[Zone]:
-    """Return zone list for a given camera. Loads override file if present."""
+    """Return zone list for a camera. Tries zone_mapper (new JSON) → zones_override.json → hardcoded."""
+    # 1. Try new versioned calibration JSON via zone_mapper
+    try:
+        from zone_mapper import get_mapper  # type: ignore
+        zones = get_mapper().get_zones_for_camera(camera_id)
+        if zones:
+            return zones
+    except Exception:
+        pass
+    # 2. Legacy zones_override.json
     override_path = os.path.join(os.path.dirname(__file__), "zones_override.json")
     if os.path.exists(override_path):
         with open(override_path) as f:
@@ -234,6 +243,7 @@ def get_zones_for_camera(camera_id: str) -> List[Zone]:
                     tuple(z.get("color_bgr", [0, 255, 128]))
                 ))
             return zones
+    # 3. Hardcoded fallback
     return CAMERA_ZONES.get(camera_id, [])
 
 
@@ -251,7 +261,15 @@ def zone_for_point(px: float, py: float, frame_w: int, frame_h: int,
 
 
 def get_entry_line_for_camera(camera_id: str) -> dict:
-    """Return entry/exit line config for camera. Loads overrides if present."""
+    """Return entry/exit line config for camera. Tries zone_mapper → zones_override.json → default."""
+    # 1. Try new versioned calibration JSON via zone_mapper
+    try:
+        from zone_mapper import get_mapper  # type: ignore
+        cfg = get_mapper().get_entry_line(camera_id)
+        if cfg and cfg.get("p1") and cfg["p1"] != [0.10, 0.50]:
+            return cfg
+    except Exception:
+        pass
     override_path = os.path.join(os.path.dirname(__file__), "zones_override.json")
     if os.path.exists(override_path):
         try:

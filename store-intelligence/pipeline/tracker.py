@@ -583,12 +583,12 @@ class VisitorIdentityManager:
 
     def purge_stale_suspended(self, wall_time: float):
         """
-        SUSPENDED → EXPIRED after SUSPENDED_RETAIN_SEC.
+        SUSPENDED → EXPIRED after adaptive occlusion_retain_sec.
         Keeps EXPIRED archive for audit; does not delete passports.
         """
         to_expire = [
             vid for vid, p in self._suspended.items()
-            if (wall_time - p.last_seen) > cfg.SUSPENDED_RETAIN_SEC
+            if (wall_time - p.last_seen) > p.occlusion_retain_sec
         ]
         for vid in to_expire:
             passport = self._suspended.pop(vid)

@@ -280,10 +280,11 @@ def annotate_frame(
 
     # Draw entry line
     if entry_detector and camera_id == "CAM_ENTRY_03":
-        x1, y, x2, _ = entry_detector.get_line_pixels(frame_w, frame_h)
-        cv2.line(annotated, (x1, y), (x2, y), (0, 255, 255), 2)
-        cv2.putText(annotated, "ENTRY LINE", (x1+4, y-6),
+        x1, y1, x2, y2 = entry_detector.get_line_pixels(frame_w, frame_h)
+        cv2.line(annotated, (x1, y1), (x2, y2), (0, 255, 255), 2)
+        cv2.putText(annotated, "ENTRY LINE", (x1+4, y1-6),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+
 
     # Draw detections
     for track_id, bbox_xyxy, conf in detections:
@@ -358,6 +359,7 @@ class CameraProcessor:
         self.camera_rep    = camera_rep
 
         self.zones         = get_zones_for_camera(camera_id)
+        self._zones_refresh_counter = 0   # refresh zones every N frames
         self.dwell_tracker = ZoneDwellTracker()
 
         # Camera-specific modules
@@ -401,6 +403,12 @@ class CameraProcessor:
         """
         h, w = frame_bgr.shape[:2]
         ts   = make_timestamp(self.start_time, self.frame_index, self.fps)
+
+        # Hot-reload zone geometry every 150 frames (~10s @15fps)
+        self._zones_refresh_counter += 1
+        if self._zones_refresh_counter >= 150:
+            self._zones_refresh_counter = 0
+            self.zones = get_zones_for_camera(self.camera_id)
 
         detections = self.detector.detect_and_track(frame_bgr, self.camera_id)
 

@@ -58,9 +58,11 @@ def compute_black_ratio(crop_bgr: np.ndarray) -> float:
 def black_clothing_score(frame_bgr: np.ndarray,
                          bbox_xyxy: Tuple[int, int, int, int]) -> float:
     """
-    Uses a robust 5-zone body sampling technique (chest, abdomen, upper legs, left arm, right arm)
-    to determine the strength of the black uniform signal, ignoring the face and shoes.
-    Returns a score between 0.0 and 1.0 based on how many zones are 'black'.
+    Uses a strict upper and lower body color analysis.
+    - If the top half (shirt) is NOT black, they are classified as a customer.
+    - If the bottom half (pants) is visible and NOT black (e.g. blue jeans, colorful pants),
+      they are classified as a customer.
+    - If they are behind a counter (bottom not fully visible) and the top is black, they are staff.
     """
     if frame_bgr is None:
         return 0.0
@@ -73,31 +75,28 @@ def black_clothing_score(frame_bgr: np.ndarray,
     if pw < 10 or ph < 20:
         return 0.0
 
-    # Define 5 body zones specifically targeting clothing (ignoring head and shoes)
-    zones = [
-        frame_bgr[y1+int(ph*0.20):y1+int(ph*0.40), x1:x2],                          # chest
-        frame_bgr[y1+int(ph*0.40):y1+int(ph*0.60), x1:x2],                          # abdomen
-        frame_bgr[y1+int(ph*0.60):y1+int(ph*0.80), x1:x2],                          # upper legs
-        frame_bgr[y1+int(ph*0.25):y1+int(ph*0.75), x1:x1+int(pw*0.35)],             # left side/arm
-        frame_bgr[y1+int(ph*0.25):y1+int(ph*0.75), x1+int(pw*0.65):x2],             # right side/arm
-    ]
-    
-    # Calculate black ratio for each zone
-    zone_ratios = [compute_black_ratio(z) for z in zones]
-    
-    # A zone is "dark" if >= 55% of its pixels match the black HSV threshold
-    # (raised from 45% to reduce false positives on dark-navy/charcoal clothing)
-    dark_votes = sum(1 for r in zone_ratios if r >= 0.55)
-    
-    # Require at least 2 dark zones to score anything (avoids one-zone false triggers)
-    if dark_votes < 2:
+    # Define top half (chest/abdomen) and bottom half (legs/pants) crops
+    top_crop = frame_bgr[y1+int(ph*0.15):y1+int(ph*0.50), x1:x2]
+    bottom_crop = frame_bgr[y1+int(ph*0.55):y1+int(ph*0.85), x1:x2]
+
+    top_black = compute_black_ratio(top_crop)
+    bottom_black = compute_black_ratio(bottom_crop)
+
+    # 1. Shirt must be black
+    if top_black < 0.45:
         return 0.0
-    
-    # Map votes to a continuous confidence score between 0.0 and 1.0
-    # 2 zones = 0.20 (not staff), 3 zones = 0.50, 4 zones = 0.75, 5 zones = 1.0
-    score_map = {2: 0.20, 3: 0.50, 4: 0.75, 5: 1.00}
-    score = score_map.get(dark_votes, dark_votes / 5.0)
-    
+
+    # 2. Pants must be black if visible (not cut off at the bottom of frame)
+    bottom_visible = (y2 < H - 15)
+    if bottom_visible and bottom_black < 0.40:
+        return 0.0
+
+    # Score is average of top and bottom, or just top if bottom is occluded
+    if bottom_visible:
+        score = (top_black + bottom_black) / 2.0
+    else:
+        score = top_black
+
     return float(np.clip(score, 0.0, 1.0))
 
 
@@ -123,6 +122,7 @@ class StaffBehaviourTracker:
         self._black_scores:  Dict[str, deque] = defaultdict(lambda: deque(maxlen=30))
         self._is_staff_cache: Dict[str, bool] = {}
         self._cache_dirty:   Dict[str, bool]  = defaultdict(lambda: True)
+        self._observed_in_staff_zone = set()
 
         # Thresholds
         self.MIN_FRAMES_FOR_STAFF_DECISION = cfg.STAFF_MIN_FRAMES
@@ -136,20 +136,37 @@ class StaffBehaviourTracker:
         self._cameras_seen[visitor_id].add(camera_id)
         if zone_id:
             self._zones_visited[visitor_id].add(zone_id)
+            # Anyone inside a billing counter or staff area is always staff
+            try:
+                from zone_mapper import get_mapper
+                mapper = get_mapper()
+                shapes = mapper.get_shapes_for_camera(camera_id)
+                for s in shapes:
+                    if s.get("shape_id") == zone_id:
+                        if s.get("role") in ("billing_counter", "staff_area"):
+                            self._observed_in_staff_zone.add(visitor_id)
+                            break
+            except Exception:
+                pass
 
         if not skip_clothing:
             bs = black_clothing_score(frame_bgr, bbox_xyxy)
             self._black_scores[visitor_id].append(bs)
         self._cache_dirty[visitor_id] = True
 
+
     def is_staff(self, visitor_id: str) -> Tuple[bool, float]:
         """
         Returns (is_staff, confidence).
         Confidence is low when we have few observations.
         """
+        if visitor_id in self._observed_in_staff_zone:
+            return True, 0.99
+
         fc = self._frame_count.get(visitor_id, 0)
         if fc < 5:
             return False, 0.30    # not enough data yet
+
 
         # --- Black clothing score ---
         scores = list(self._black_scores.get(visitor_id, []))
@@ -158,6 +175,10 @@ class StaffBehaviourTracker:
             black_p75 = float(np.percentile(scores, 75))
         else:
             black_p75 = 0.0
+
+        # If they consistently wear black clothing, they are staff
+        if black_p75 >= 0.55:
+            return True, round(black_p75, 3)
 
         # --- Presence score (staff are present for many frames) ---
         # Cap at 500 frames ~33 seconds at 15fps
@@ -195,6 +216,7 @@ class StaffBehaviourTracker:
             self._cache_dirty[visitor_id] = False
 
         return is_staff_flag, round(float(final_confidence), 3)
+
 
     def get_black_score(self, visitor_id: str) -> float:
         scores = list(self._black_scores.get(visitor_id, []))

@@ -57,7 +57,7 @@ class EventMetadata(BaseModel):
     track_conf:            Optional[float] = None
     reid_conf:             Optional[float] = None
     zone_conf:             Optional[float] = None
-    confidence_lineage:    Optional[Dict[str, float]] = None
+    confidence_lineage:    Optional[Dict[str, Any]] = None
 
     model_config = {"extra": "allow"}   # forward-compat: allow new fields
 

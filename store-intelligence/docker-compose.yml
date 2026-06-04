@@ -39,6 +39,8 @@ x-pipeline-volumes: &pipeline-volumes
   - ${DATA_DIR:-./data}:/data
   # Hot-reload pipeline source during development
   - ./pipeline:/app/pipeline:ro
+  # Calibration JSON — shared between calibrate tool and pipeline containers
+  - ./data/calibration:/data/calibration
 
 services:
   # ── GPU pipeline (default) ────────────────────────────────────────────────

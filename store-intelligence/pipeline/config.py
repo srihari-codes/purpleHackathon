@@ -49,11 +49,12 @@ class _Config:
     EMBEDDING_REFRESH_FRAMES: int   = 15
 
     # ── Staff Detection ───────────────────────────────────────────────────────
-    BLACK_SAT_MAX: int              = 50     # HSV saturation ≤ this → "black" (tighter: was 60)
-    BLACK_VAL_MAX: int              = 50     # HSV value ≤ this → "black" (tighter: was 60)
+    BLACK_SAT_MAX: int              = 90     # HSV saturation ≤ this → "black" (loosened from 50)
+    BLACK_VAL_MAX: int              = 90     # HSV value ≤ this → "black" (loosened from 50)
     BLACK_ZONE_THRESHOLD: float     = 0.45   # fraction of zone pixels that must be black
-    STAFF_SCORE_THRESHOLD: float    = 0.65   # composite score to classify as staff (raised: was 0.55)
-    STAFF_MIN_FRAMES: int           = 25     # need more frames before deciding (raised: was 15)
+    STAFF_SCORE_THRESHOLD: float    = 0.65   # composite score to classify as staff
+    STAFF_MIN_FRAMES: int           = 25     # need more frames before deciding
+
 
     # Staff composite weights: black clothing is primary signal
     # Requires BOTH consistent all-black clothing AND sustained presence

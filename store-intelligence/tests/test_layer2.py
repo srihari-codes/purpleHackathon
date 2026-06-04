@@ -1,3 +1,25 @@
+# PROMPT:
+# Please generate a comprehensive test suite in pytest for a Retail Intelligence backend system using FastAPI.
+# The tests must cover:
+# 1. Event schema validation and constraints (clock skew, empty visitor_id, confidence bounds, invalid timestamps).
+# 2. Ingestion pipeline deduplication, idempotency, and partial success (structured errors).
+# 3. Sessionization logic (happy path, out-of-order events, re-entry sessionization).
+# 4. Calibration Engine (rolling window stats and thresholds).
+# 5. Verifier Engine rules (negative queue depth, confidence cliff, too fast re-entry, duplicate active sessions).
+# 6. Replay Engine reproducibility from jsonl files.
+# 7. POS correlation logic (5-minute matching window) and projections (funnel, metrics, heatmap, anomalies, health).
+# 8. Complete API integration flow for /events/ingest, /stores/{id}/metrics, /funnel, /heatmap, /anomalies, /health.
+# 9. Complex edge cases including: empty stores (404), all-staff clips (filter out), zero-purchase conversion calculation, Brigade Bangalore POS CSV format parsing, visitor-centric conversion under re-entry, and verifier integration during sessionization.
+# Make the tests highly robust, clean, and self-contained with proper setup and teardown of stores.
+#
+# CHANGES MADE:
+# 1. Updated the imports to correctly point to the app folder structure (`app.models`, `app.ingestion`, etc.).
+# 2. Configured the TestClient with the FastAPI application imported from `app.main`.
+# 3. Formatted mock data to match the actual events schema, ensuring exact matching of `sku_zone` and metadata fields.
+# 4. Implemented transaction csv file generation using tempfile for test_brigade_bangalore_csv_format.
+# 5. Added explicit store state clears (`_event_store.clear()`, `_sess_store.clear()`, etc.) before integration tests to ensure test isolation.
+# 6. Fixed timezone conversion details in transaction and event timestamps to prevent clock skew validation failures.
+
 import os
 import json
 import uuid
