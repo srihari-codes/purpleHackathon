@@ -609,3 +609,94 @@ def test_replay_engine_verifier_and_correlation_consistency():
     finally:
         os.unlink(temp_path)
 
+
+def test_strict_type_and_uuid_validation():
+    _event_store.clear()
+    
+    # 1. Invalid UUID
+    invalid_uuid_event = make_raw_event("ENTRY", "VIS_STRICT_01", store_id="STORE_STRICT", offset_sec=0)
+    invalid_uuid_event["event_id"] = "not-a-uuid"
+    resp = client.post("/events/ingest", json={"events": [invalid_uuid_event]})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["rejected"] == 1
+    assert "valid UUID" in data["errors"][0]["reason"]
+
+    # 2. Coerced type (dwell_ms as string)
+    coerced_event = make_raw_event("ZONE_DWELL", "VIS_STRICT_01", store_id="STORE_STRICT", offset_sec=10)
+    coerced_event["dwell_ms"] = "100"  # string should be rejected in strict mode
+    resp = client.post("/events/ingest", json={"events": [coerced_event]})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["rejected"] == 1
+    assert "dwell_ms" in data["errors"][0]["reason"]
+
+    # 3. Coerced type (is_staff as string)
+    coerced_event2 = make_raw_event("ENTRY", "VIS_STRICT_01", store_id="STORE_STRICT", offset_sec=20)
+    coerced_event2["is_staff"] = "True"
+    resp = client.post("/events/ingest", json={"events": [coerced_event2]})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["rejected"] == 1
+    assert "is_staff" in data["errors"][0]["reason"]
+
+
+def test_zero_traffic_store_metrics():
+    _event_store.clear()
+    _sess_store.clear()
+    from datetime import datetime, timezone
+    
+    # Manually seed a POS transaction to make the store "known" to correlation engine
+    from app.correlation import POSTransaction
+    tx = POSTransaction(
+        store_id="STORE_ZERO",
+        transaction_id="TX_ZERO_1",
+        timestamp=datetime.now(timezone.utc).isoformat()
+    )
+    _correlation.add_transaction(tx)
+
+    # 1. Metrics
+    resp = client.get("/stores/STORE_ZERO/metrics")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["unique_visitors"] == 0
+    assert data["conversion_rate"] == 0.0
+    assert data["current_queue_depth"] == 0
+    assert data["queue_depth"] == 0
+
+    # 2. Funnel
+    resp = client.get("/stores/STORE_ZERO/funnel")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["funnel"]) == 4
+    assert all(stage["count"] == 0 for stage in data["funnel"])
+
+    # 3. Heatmap
+    resp = client.get("/stores/STORE_ZERO/heatmap")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["zones"] == []
+    assert data["session_count"] == 0
+
+
+def test_health_stale_warnings():
+    _event_store.clear()
+    _sess_store.clear()
+    from datetime import datetime, timezone, timedelta
+
+    # Ingest event 20 minutes in the past
+    stale_time = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat().replace("+00:00", "Z")
+    ev = make_raw_event("ENTRY", "VIS_STALE", store_id="STORE_STALE", offset_sec=0)
+    ev["timestamp"] = stale_time
+    # Avoid future time validation error or clock skew guard (20 mins in past is fine, it only guards >60s future)
+    resp = client.post("/events/ingest", json={"events": [ev]})
+    assert resp.status_code == 200
+
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "DEGRADED"
+    assert len(data["warnings"]) > 0
+    assert any("STORE_STALE" in w for w in data["warnings"])
+
+

@@ -112,3 +112,38 @@ The Redis caching suggestion was valid but out of scope for this challenge: at 5
 ## Storage Engine Note
 
 As documented above, SQLite was the other strong candidate for a persistent option if zero-restart-durability were a hard requirement. The `CorrelationEngine` already parses POS CSV files into Python objects on startup; SQLite would replace the in-memory dict with a disk-backed B-tree, requiring minimal code change. This is documented in code comments as the recommended upgrade path for production deployment.
+
+---
+
+## Decision 4 — Strict Type & UUID-v4 Enforcement
+
+### The Problem
+
+By default, Pydantic coercively parses fields (e.g., parsing the string `"1"` as integer `1` or the string `"True"` as boolean `True`). While convenient, this coercion can mask upstream detection pipeline bugs, leading to silent data degradation or downstream analysis failures.
+
+### Options Considered
+
+- **Option A — Coercive validation**: Keep the standard Pydantic mode and let the API silently convert types.
+- **Option B — Strict validation & UUID validation**: Enable Pydantic's strict type validation (`strict=True`) and add UUID format validation to `event_id`.
+
+### What I Chose and Why
+
+**Option B** — Strict validation and UUID format checking. This ensures that the incoming API data contract is respected exactly. Any type mismatches (such as string values passed for `dwell_ms` or `is_staff`) are rejected upfront in the batch ingestion endpoint and recorded under the `rejected` count, and invalid `event_id` fields are caught immediately, ensuring the reliability of the sessionization state machine.
+
+---
+
+## Decision 5 — Zero-Traffic & POS-Only Store Handling
+
+### The Problem
+
+If a new store is registered or POS data is loaded before the store starts sending CCTV events, endpoints like `/stores/{id}/metrics` would return a `404 Store Not Found` response because the store has no recorded events or active sessions. This breaks onboarding dashboards that expect metrics immediately upon store creation or POS loading.
+
+### Options Considered
+
+- **Option A — Return 404**: Treat the store as non-existent until the first CCTV event is ingested.
+- **Option B — Zero-Initialized Responses**: Allow the request to succeed (200 OK) if the store is known via POS transactions, returning empty or zero-initialized metric/funnel/heatmap shapes.
+
+### What I Chose and Why
+
+**Option B** — Zero-Initialized Responses. We updated the API guard (`_guard`) to recognize a store as valid if it has events, sessions, OR loaded POS transactions. Querying metrics, funnels, or heatmaps for a zero-traffic store returns a clean JSON payload with all counts initialized to zero and empty lists. This prevents frontend UI crashes during onboarding and provides a seamless setup workflow.
+

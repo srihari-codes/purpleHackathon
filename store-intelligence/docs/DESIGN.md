@@ -145,5 +145,7 @@ Low-confidence events are **never silently dropped**. They are emitted with thei
 - **Idempotent ingest**: `event_id` (UUID v4) is used as a deduplication key in `EventStore._seen_ids`; replaying the same payload returns `duplicates=N` without side effects.
 - **Structured logging**: every HTTP request emits `trace_id`, `store_id`, `endpoint`, `latency_ms`, `event_count`, `status_code` as JSON to stdout.
 - **Graceful degradation**: all exceptions are caught at the middleware level; no raw stack traces in responses. Storage failures return HTTP 503 with a structured `{"error": "STORAGE_UNAVAILABLE", "message": "..."}` body.
-- **STALE_FEED detection**: `/health` computes `lag_sec` per store and raises `STALE_FEED` if the last event is more than 10 minutes old.
+- **STALE_FEED detection**: `/health` computes `lag_sec` per store and raises `STALE_FEED` if the last event is more than 10 minutes old, aggregating warning strings in a top-level `"warnings"` list.
+- **Strict Pydantic Type Validation**: Enforces strict type checking (e.g., rejecting coerced type strings for boolean and integer fields like `is_staff` and `dwell_ms`) and validates that `event_id` is a valid UUID-v4 to ensure schema compliance.
+- **Zero-Traffic & POS-only Store Support**: Gracefully supports queries for stores that have POS transactions loaded but no CCTV event traffic, returning 200 OK responses with zero-initialized metrics rather than throwing a 404 error.
 - **GPU/CPU fallback**: `./run.sh` detects the NVIDIA Container Runtime and automatically uses the CPU docker-compose profile if GPU is unavailable.

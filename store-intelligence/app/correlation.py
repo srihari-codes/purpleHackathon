@@ -109,6 +109,10 @@ class CorrelationEngine:
         self._converted_sessions: Set[str] = set()
         self._lock = threading.Lock()
 
+    def get_all_store_ids(self) -> List[str]:
+        with self._lock:
+            return list(self._transactions.keys())
+
     # ── load POS data ──────────────────────────────────────────────────────
 
     def load_csv(self, path: str) -> int:

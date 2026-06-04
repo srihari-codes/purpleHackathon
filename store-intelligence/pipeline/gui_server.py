@@ -342,7 +342,12 @@ def create_app(shared: SharedState):
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
-        return DASHBOARD_HTML
+        import os
+        path = os.path.join(os.path.dirname(__file__), "wizard.html")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return HTMLResponse(content=f.read())
+        return HTMLResponse(content="<h3>wizard.html not found</h3>", status_code=404)
 
     @app.get("/api/state")
     async def state():
@@ -429,6 +434,17 @@ def create_app(shared: SharedState):
             pass
         finally:
             shared._event_queues.discard(q)
+
+    # Register wizard routes
+    try:
+        from wizard_backend import register_wizard_routes
+    except ImportError:
+        from pipeline.wizard_backend import register_wizard_routes
+    
+    try:
+        register_wizard_routes(app, shared)
+    except Exception as e:
+        logger.error(f"Failed to register wizard routes: {e}")
 
     return app
 

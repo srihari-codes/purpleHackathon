@@ -59,7 +59,10 @@ class EventMetadata(BaseModel):
     zone_conf:             Optional[float] = None
     confidence_lineage:    Optional[Dict[str, Any]] = None
 
-    model_config = {"extra": "allow"}   # forward-compat: allow new fields
+    model_config = {
+        "strict": True,
+        "extra": "allow",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +74,7 @@ class InboundEvent(BaseModel):
     A single structured event emitted by the Detection Layer.
 
     Validation rules (all rejections produce a structured reason):
-    - event_id   : non-empty string
+    - event_id   : non-empty string, valid UUID-v4
     - store_id   : non-empty string
     - camera_id  : non-empty string
     - visitor_id : non-empty string
@@ -84,7 +87,7 @@ class InboundEvent(BaseModel):
     store_id:   str        = Field(..., description="Store identifier from store_layout.json")
     camera_id:  str        = Field(..., description="Camera that produced this event")
     visitor_id: str        = Field(..., description="Re-ID token; unique per visit session")
-    event_type: EventType  = Field(..., description="Event type catalogue value")
+    event_type: EventType  = Field(..., strict=False, description="Event type catalogue value")
     timestamp:  str        = Field(..., description="ISO-8601 UTC timestamp")
     zone_id:    Optional[str]   = Field(None, description="Zone name; null for ENTRY/EXIT")
     dwell_ms:   int             = Field(0,    ge=0, description="Dwell duration in ms")
@@ -92,21 +95,34 @@ class InboundEvent(BaseModel):
     confidence: float           = Field(..., ge=0.0, le=1.0, description="Final propagated confidence")
     metadata:   EventMetadata   = Field(default_factory=EventMetadata)
 
+    model_config = {
+        "strict": True,
+    }
+
     # ── validators ────────────────────────────────────────────────────────
 
-    @field_validator("event_id", "store_id", "camera_id", "visitor_id", mode="before")
+    @field_validator("event_id")
     @classmethod
-    def non_empty_string(cls, v: Any, info) -> str:
-        s = str(v).strip()
+    def valid_uuid(cls, v: str) -> str:
+        try:
+            uuid.UUID(v)
+        except ValueError:
+            raise ValueError("event_id must be a valid UUID string")
+        return v
+
+    @field_validator("event_id", "store_id", "camera_id", "visitor_id")
+    @classmethod
+    def non_empty_string(cls, v: str, info) -> str:
+        s = v.strip()
         if not s:
             raise ValueError(f"{info.field_name} must be a non-empty string")
         return s
 
-    @field_validator("timestamp", mode="before")
+    @field_validator("timestamp")
     @classmethod
-    def valid_iso_timestamp(cls, v: Any) -> str:
+    def valid_iso_timestamp(cls, v: str) -> str:
         """Parse and normalise timestamp; reject unparseable values."""
-        raw = str(v).strip()
+        raw = v.strip()
         # Support trailing Z (UTC) notation
         normalised = raw.replace("Z", "+00:00")
         try:

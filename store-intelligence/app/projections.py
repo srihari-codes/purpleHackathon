@@ -120,6 +120,7 @@ class MetricsProjection:
             "converted_count":   converted,
             "avg_dwell_per_zone": avg_dwell_per_zone,
             "current_queue_depth": max_queue_depth,
+            "queue_depth":       max_queue_depth,
             "abandonment_rate":  abandonment_rate,
             "total_sessions":    len(customer_sessions),
             "active_sessions":   sum(1 for s in customer_sessions if s.is_active),
@@ -456,10 +457,16 @@ class HealthProjection:
                 "status":         "STALE_FEED" if stale else "OK",
             })
 
+        warnings = []
+        for sh in stores_health:
+            if sh["stale_feed"]:
+                warnings.append(f"STALE_FEED: Store '{sh['store_id']}' has not received events recently.")
+
         return {
             "status":       "DEGRADED" if overall_stale else "OK",
             "started_at":   started_at,
             "checked_at":   _iso(now),
+            "warnings":     warnings,
             "stores":       stores_health,
             "store_count":  len(stores_health),
         }

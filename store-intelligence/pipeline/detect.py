@@ -783,7 +783,7 @@ def find_video_file(clips_dir: str, cam_num: str) -> Optional[str]:
 
 
 def infer_camera_start_time(
-    clips_dir: str, cam_nums: list
+    clips_dir: str, cam_nums: list, camera_file_map: Optional[Dict[str, str]] = None
 ) -> Dict[str, datetime]:
     """
     Try to OCR start timestamps from first frame of each camera.
@@ -797,10 +797,13 @@ def infer_camera_start_time(
     # 1. OCR each camera and collect file modification dates
     max_valid_date = None
     for cam_num in cam_nums:
-        path = find_video_file(clips_dir, cam_num)
+        camera_id = CAMERA_MAP.get(cam_num)
+        if camera_file_map and camera_id in camera_file_map:
+            path = camera_file_map[camera_id]
+        else:
+            path = find_video_file(clips_dir, cam_num)
         if not path:
             continue
-        camera_id = CAMERA_MAP.get(cam_num)
         
         # Get video file modification date
         if os.path.exists(path):
@@ -881,6 +884,7 @@ def run_pipeline(
     gui_port:    int  = 8080,
     speed:       float = 1.0,
     cam3_start:  Optional[str] = None,
+    camera_file_map: Optional[Dict[str, str]] = None,
 ):
     logger.info(f"Starting detection pipeline for {store_id}")
     logger.info(f"Clips dir: {clips_dir}  Output: {output_path}  Speed: {speed}x")
@@ -935,7 +939,7 @@ def run_pipeline(
 
     # --- Discover camera files ---
     cam_nums  = list(CAMERA_MAP.keys())
-    start_times = infer_camera_start_time(clips_dir, cam_nums)
+    start_times = infer_camera_start_time(clips_dir, cam_nums, camera_file_map)
 
     # Override Cam3 start time if provided
     if cam3_start:
@@ -951,7 +955,10 @@ def run_pipeline(
     caps: Dict[str, cv2.VideoCapture] = {}
 
     for cam_num, camera_id in CAMERA_MAP.items():
-        path = find_video_file(clips_dir, cam_num)
+        if camera_file_map and camera_id in camera_file_map:
+            path = camera_file_map[camera_id]
+        else:
+            path = find_video_file(clips_dir, cam_num)
         if not path:
             logger.warning(f"No video file found for {camera_id} (cam {cam_num})")
             continue

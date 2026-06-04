@@ -191,7 +191,11 @@ def _store_error(store_id: str) -> JSONResponse:
 
 def _guard(store_id: str) -> Optional[JSONResponse]:
     """Return 404 if we have no data for this store."""
-    known = set(_event_store.get_all_store_ids()) | set(_sess_store.get_all_store_ids())
+    known = (
+        set(_event_store.get_all_store_ids())
+        | set(_sess_store.get_all_store_ids())
+        | set(_correlation.get_all_store_ids())
+    )
     if store_id not in known:
         return _store_error(store_id)
     return None
