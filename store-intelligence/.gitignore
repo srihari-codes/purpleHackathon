@@ -136,7 +136,12 @@ ehthumbs.db
 Thumbs.db
 
 # Project-specific local files
-data/
+data/events.jsonl
+data/events_purplle.jsonl
+data/warnings.jsonl
+data/si_session/
+data/test_clips/
+data/clips/
 yolo*.pt
 *.jsonl
 

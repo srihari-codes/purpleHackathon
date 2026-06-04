@@ -1,201 +1,125 @@
-# Purplle Store Intelligence — Quickstart Guide
+# Purplle Store Intelligence
 
-A complete retail analytics platform: raw CCTV footage → live store metrics API.
+> **Raw CCTV footage → Live retail analytics API + real-time dashboard. Zero configuration required.**
 
-- **Detection**: YOLO11m + ByteTrack + 8-signal Re-ID consensus
-- **API**: FastAPI with real-time sessions, funnel, heatmap, and anomaly detection
-- **Dashboard**: Live WebSocket web UI at `http://localhost:8080`
-- **Docs**: [`docs/DESIGN.md`](docs/DESIGN.md) · [`docs/CHOICES.md`](docs/CHOICES.md)
+[![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org) [![FastAPI](https://img.shields.io/badge/FastAPI-0.110-green)](https://fastapi.tiangolo.com) [![YOLO11m](https://img.shields.io/badge/Model-YOLO11m-red)](https://ultralytics.com) [![Docker](https://img.shields.io/badge/Docker-Compose-blue)](https://docker.com)
 
 ---
 
-## 5-Command Quickstart
+## What This Is
+
+A complete retail intelligence platform built from scratch: drop in CCTV clips, get a live analytics dashboard with real-time annotated video, queue depth tracking, entry/exit counts, zone heatmaps, conversion funnels, and a production-grade REST API.
+
+**Stack:**
+| Layer | Technology |
+|---|---|
+| Detection | YOLO11m + ByteTrack |
+| Re-ID | 8-signal consensus voter (spatial, appearance, trajectory, zone, temporal, handoff, ghost-track, shadow-track) |
+| API | FastAPI + Pydantic strict validation |
+| Dashboard | WebSocket single-page app with live annotated frames |
+| Containerisation | Docker Compose — GPU auto-detected, CPU fallback |
+
+---
+
+## Quickstart (5 commands)
 
 ```bash
 git clone <your-repository-url>
-cd purpleHackathon/store-intelligence
-cp /path/to/your/clips/*.mp4 data/clips/       # place CAM 1.mp4 … CAM 5.mp4
-./run.sh                                         # starts pipeline + API + calibration UI
-curl http://localhost:8000/health               # verify API is running
-```
-
-That's it. The detection pipeline processes all clips, writes events to `data/events.jsonl`, and the API is immediately queryable.
-
----
-
-## Prerequisites
-
-Ensure you have the following installed on your host system:
-1. **Docker** and **Docker Compose**
-2. **Git**
-3. (Optional but recommended) **NVIDIA Container Toolkit** for full GPU/CUDA acceleration. The startup script will automatically fall back to CPU mode if NVIDIA GPU drivers are not present.
-
----
-
-## Prerequisites
-
-Ensure you have the following installed on your host system:
-1. **Docker** and **Docker Compose**
-2. **Git**
-3. (Optional but recommended) **NVIDIA Container Toolkit** for full GPU/CUDA acceleration. The startup script will automatically fall back to CPU mode if NVIDIA GPU drivers are not present.
-
----
-
-## Setup & Running Instructions
-
-### Step 1: Clone the Repository
-Clone the repository and navigate to the project directory:
-```bash
-git clone <your-repository-url>
-cd purpleHackathon
-```
-
----
-
-### Step 2: Position the CCTV Footage
-The detection pipeline requires the 5 CCTV video feeds (`CAM 1.mp4`, `CAM 2.mp4`, `CAM 3.mp4`, `CAM 4.mp4`, and `CAM 5.mp4`).
-
-Choose **one** of the two setup methods below:
-
-#### Option A: Project Local Clips Folder (Recommended & Easiest)
-Simply place your 5 `CAM *.mp4` files inside the project's local clips directory:
-`store-intelligence/data/clips/`
-
-#### Option B: Use any Custom Folder
-You can keep the files anywhere on your machine (e.g., inside your `Downloads/CCTV Footage` folder) and pass the path using the `CLIPS_DIR` environment variable when starting.
-
----
-
-### Step 3: Start the Pipeline
-
-First, navigate into the project's root folder:
-```bash
 cd store-intelligence
+cp /path/to/footage/*.mp4 data/clips/   # CAM 1.mp4 … CAM 5.mp4
+./run.sh                                 # starts all services
+curl http://localhost:8000/health        # verify API is live
 ```
 
-Depending on the setup option you chose in **Step 2**, run the corresponding command:
+> **NVIDIA GPU?** Detected automatically. No flags needed. Falls back to CPU cleanly.
 
-#### If you set up Option A (Default folder):
-Simply execute the run script:
+---
+
+## The Full Workflow
+
+### Step 1 — Launch
+
 ```bash
 ./run.sh
 ```
 
-#### If you set up Option B (Custom folder):
-Provide the absolute path to your folder via `CLIPS_DIR`:
-```bash
-CLIPS_DIR="/path/to/your/CCTV Footage" ./run.sh
-```
+Three containers start:
+
+| Service | URL | Purpose |
+|---|---|---|
+| `store_detection_pipeline` | `http://localhost:8080` | Live dashboard + onboarding wizard |
+| `store_zone_calibrator` | `http://localhost:8081` | Zone calibration studio |
+| `store_intelligence_api` | `http://localhost:8000` | REST analytics API |
 
 ---
 
-## Overall Docker Design
+### Step 2 — Onboard via the Wizard (`http://localhost:8080`)
 
-* **Automatic Hardware Detection:** The `./run.sh` script automatically checks for GPU availability. If CUDA is detected, it configures complete hardware-accelerated tracking. If not, it falls back to a clean CPU pipeline automatically.
-* **Events File Persistence:** Output events are written to `store-intelligence/data/events.jsonl`. This file is persisted on your host and is ignored in git so that your local testing outputs do not conflict with the code repository.
-* **Development Code Mounting:** The local `pipeline/` directory is mounted directly into the container in real-time, allowing you to edit python modules on your host and see changes instantly without rebuilding.
+The dashboard opens in **Wizard Mode** when no store is configured. Walk through 4 steps:
 
----
+**① Store Setup**
+- Enter Store Name and Store Code → auto-generates a `STORE_ID`
 
-## Running the Services Separately
+**② Add Cameras**
+- Click `+ Entrance/Exit`, `+ Billing Counter`, `+ Sales Floor`, or `+ Godown/Staff`
+- Each camera gets a typed ID: `CAM_ENTRY_01`, `CAM_BILLING_01`, `CAM_FLOOR_01`, etc.
+- Upload the matching `.mp4` clip — first frame previewed instantly
 
-### 1. View the Main GUI Dashboard
-Once the container starts, open your browser and navigate to:
-```text
-http://localhost:8080
-```
-This launches the real-time event analytics dashboard. Metrics (active visitors, queue depth, event count) update live as the detection pipeline processes frames.
+**③ Configure Zones** (`http://localhost:8081`)
+- Draw polygons directly on first-frame screenshots
+- Define: entry/exit lines, billing queue area, product zones, staff-only areas
+- Save → calibration JSON written to `data/calibration/{STORE_ID}.json`
 
-### 2. Run the Interactive Calibration UI
-If you need to calibrate entry/exit crossing lines or polygon boundaries, run:
-```bash
-# If Option A
-docker compose up calibrate
-
-# If Option B
-CLIPS_DIR="/path/to/your/CCTV Footage" docker compose up calibrate
-```
-Then navigate to `http://localhost:8081` in your browser. Any custom polygons you draw will be saved directly back to `pipeline/zones_override.json` on your host machine.
+**④ Start Analysis**
+- Click **Start Analysis** → detection pipeline launches in-container
+- Dashboard transitions to **Live View** automatically
 
 ---
 
-## How Detection Output Feeds Into the API
+### Step 3 — Live Dashboard
 
-The detection pipeline and the Intelligence API are connected in two ways:
+Once analysis starts:
 
-### Automatic (default)
-`./run.sh` starts both the `pipeline` and `api` containers. The pipeline writes events to `/data/events.jsonl` (host path: `store-intelligence/data/events.jsonl`). The pipeline also ingests events into the API automatically via `POST /events/ingest` as they are emitted.
-
-### Manual replay (for debugging or re-ingestion)
-If the API container restarted and lost in-memory state, replay events from the JSONL file without re-running detection:
-
-```bash
-# Replay all events from the saved JSONL into the API
-curl -X POST http://localhost:8000/stores/STORE_BLR_002/replay \
-  -H "Content-Type: application/json" \
-  -d '{"path": "/data/events.jsonl"}'
-```
-
-### Manual batch ingest
-You can also send events directly from the JSONL file in batches:
-
-```bash
-# Read events.jsonl and POST in batches of 100
-python3 -c "
-import json, requests, itertools
-with open('data/events.jsonl') as f:
-    events = [json.loads(l) for l in f if l.strip()]
-for i in range(0, len(events), 100):
-    batch = events[i:i+100]
-    r = requests.post('http://localhost:8000/events/ingest', json={'events': batch})
-    print(f'Batch {i//100+1}: accepted={r.json()[\"accepted\"]}')
-"
-```
+- **Annotated video feeds** — bounding boxes, track IDs, zone labels, entry/exit arrows streamed via WebSocket
+- **Real-time metrics** — active visitors, entries today, exits today, queue depth
+- **Live event log** — every detection event scrolls in real time
+- **WebSocket status badge** — `🟢 Connected` / `🔴 Disconnected`
 
 ---
 
 ## API Reference
 
-The Intelligence API runs on **`http://localhost:8000`**.
+Base URL: `http://localhost:8000` · Swagger UI: `http://localhost:8000/docs`
 
-| Endpoint | Description |
-|---|---|
-| `POST /events/ingest` | Ingest batch of events (up to 500). Idempotent. |
-| `GET /stores/{id}/metrics` | Unique visitors, conversion rate, dwell, queue depth, abandonment rate |
-| `GET /stores/{id}/funnel` | Entry → Zone Visit → Billing Queue → Purchase with drop-off % |
-| `GET /stores/{id}/heatmap` | Zone visit frequency + avg dwell, normalised 0–100 |
-| `GET /stores/{id}/anomalies` | Active anomalies: queue spike, conversion drop, dead zones |
-| `GET /health` | Service status + STALE_FEED warnings per store |
-| `GET /stores/{id}/audit/{visitor_id}` | Full audit trail for a single visitor |
-| `POST /stores/{id}/replay` | Replay a historical events.jsonl for debugging |
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/events/ingest` | Ingest up to 500 events. Idempotent by `event_id`. Partial success. |
+| `GET` | `/stores/{id}/metrics` | Unique visitors, conversion rate, avg dwell/zone, queue depth, abandonment rate |
+| `GET` | `/stores/{id}/funnel` | Entry → Zone Visit → Billing Queue → Purchase with drop-off % |
+| `GET` | `/stores/{id}/heatmap` | Zone frequency + avg dwell, normalised 0–100. `data_confidence` flag |
+| `GET` | `/stores/{id}/anomalies` | Active anomalies: queue spike, conversion drop, dead zones. Severity + suggested action |
+| `GET` | `/health` | Service status, last event timestamp per store, `STALE_FEED` warnings |
+| `POST` | `/stores/{id}/replay` | Deterministic replay of `events.jsonl` — resets + re-ingests |
+| `GET` | `/stores/{id}/audit/{visitor_id}` | Full audit trail for a single visitor session |
 
-### Quick cURL examples
+### Quick cURL Examples
 
 ```bash
-# Check service health
+# Health check
 curl http://localhost:8000/health
 
-# Get store metrics
+# Store metrics
 curl http://localhost:8000/stores/STORE_BLR_002/metrics
 
-# Get conversion funnel
-curl http://localhost:8000/stores/STORE_BLR_002/funnel
-
-# Get zone heatmap
-curl http://localhost:8000/stores/STORE_BLR_002/heatmap
-
-# Get active anomalies
-curl http://localhost:8000/stores/STORE_BLR_002/anomalies
-
-# Ingest a test event
+# Ingest an event
 curl -X POST http://localhost:8000/events/ingest \
   -H "Content-Type: application/json" \
   -d '{
     "events": [{
-      "event_id": "test-uuid-001",
+      "event_id": "550e8400-e29b-41d4-a716-446655440000",
       "store_id": "STORE_BLR_002",
-      "camera_id": "CAM_ENTRY_03",
-      "visitor_id": "VIS_test01",
+      "camera_id": "CAM_ENTRY_01",
+      "visitor_id": "VIS_abc123",
       "event_type": "ENTRY",
       "timestamp": "2026-04-10T14:00:00Z",
       "zone_id": null,
@@ -205,6 +129,69 @@ curl -X POST http://localhost:8000/events/ingest \
       "metadata": {"queue_depth": null, "sku_zone": null, "session_seq": 1}
     }]
   }'
+
+# Replay events after API restart
+curl -X POST http://localhost:8000/stores/STORE_BLR_002/replay \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/data/events.jsonl"}'
+```
+
+---
+
+## Event Schema
+
+All pipeline output conforms to this schema:
+
+```json
+{
+  "event_id":   "uuid-v4",
+  "store_id":   "STORE_BLR_002",
+  "camera_id":  "CAM_ENTRY_01",
+  "visitor_id": "VIS_c8a2f1",
+  "event_type": "ZONE_DWELL",
+  "timestamp":  "2026-03-03T14:22:10Z",
+  "zone_id":    "SKINCARE",
+  "dwell_ms":   8400,
+  "is_staff":   false,
+  "confidence": 0.91,
+  "metadata": {
+    "queue_depth":         null,
+    "sku_zone":            "MOISTURISER",
+    "session_seq":         5,
+    "behavior_state":      "DWELLING",
+    "reid_score":          0.87,
+    "reentry_count":       0,
+    "session_duration_ms": 142000,
+    "wait_duration_ms":    null,
+    "det_conf":            0.94,
+    "track_conf":          0.98,
+    "reid_conf":           0.87,
+    "zone_conf":           0.85
+  }
+}
+```
+
+**Event types:** `ENTRY` · `EXIT` · `REENTRY` · `ZONE_ENTER` · `ZONE_EXIT` · `ZONE_DWELL` · `BILLING_QUEUE_JOIN` · `BILLING_QUEUE_ABANDON`
+
+---
+
+## Manual Pipeline (Batch Mode)
+
+Skip the wizard and drive the pipeline directly:
+
+```bash
+# Run detection against clips, output to events.jsonl
+docker exec store_detection_pipeline python detect.py \
+  --store_id   STORE_BLR_002 \
+  --clips_dir  /data/clips \
+  --camera_map '{"CAM_ENTRY_01":"/data/clips/CAM 3.mp4","CAM_BILLING_01":"/data/clips/CAM 5.mp4"}' \
+  --camera_roles '{"CAM_ENTRY_01":"entry","CAM_BILLING_01":"billing"}' \
+  --output     /data/events.jsonl \
+  --speed      0
+
+# Replay into API
+curl -X POST http://localhost:8000/stores/STORE_BLR_002/replay \
+  -d '{"path":"/data/events.jsonl"}'
 ```
 
 ---
@@ -212,10 +199,97 @@ curl -X POST http://localhost:8000/events/ingest \
 ## Running Tests
 
 ```bash
-cd store-intelligence
-python3 -m pytest tests/ -v                          # run all 20 tests
-python3 -m pytest tests/ --cov=app --cov-report=term # coverage report (expect ~83%)
+# All 20 tests (no external services needed — fully in-memory)
+docker exec store_intelligence_api python3 -m pytest /api/app/../tests/ -v
+
+# With coverage
+docker exec store_intelligence_api python3 -m pytest /api/app/../tests/ --cov=app --cov-report=term
 ```
 
-All tests pass with no external services required (fully in-memory).
+Expected: **20 passed**, ~83% coverage.
 
+---
+
+## Architecture Overview
+
+```
+CCTV Clips (CAM 1–5)
+        │
+        ▼
+  Onboarding Wizard   ←── http://localhost:8080
+  (store setup +
+   clip upload +
+   zone calibration)
+        │
+        ▼
+ Detection Pipeline
+ ┌─────────────────────────────────────────┐
+ │  YOLO11m → ByteTrack → 8-signal Re-ID  │
+ │  StaffTracker │ ZoneDwellTracker        │
+ │  EntryExitDetector │ QueueTracker       │
+ │         │                  │            │
+ │  events.jsonl      WebSocket frames     │
+ └─────────────────────────────────────────┘
+        │                     │
+        ▼                     ▼
+  Intelligence API      Live Dashboard
+  :8000                 :8080
+  /metrics              Annotated video
+  /funnel               Queue depth
+  /heatmap              Event log
+  /anomalies
+  /health
+```
+
+---
+
+## Project Structure
+
+```
+store-intelligence/
+├── pipeline/
+│   ├── detect.py            # Main detection + tracking orchestrator
+│   ├── tracker.py           # 8-signal consensus Re-ID engine
+│   ├── events.py            # Event schema + emitter
+│   ├── billing_queue.py     # Queue depth tracking (BILLING_QUEUE_JOIN/ABANDON)
+│   ├── entry_exit.py        # Line-crossing entry/exit detector
+│   ├── staff.py             # HSV + zone-rule staff classifier
+│   ├── zones.py             # Zone polygon definitions
+│   ├── zone_mapper.py       # Hot-reloadable calibration JSON loader
+│   ├── gui_server.py        # WebSocket server + wizard API host
+│   ├── wizard_backend.py    # Wizard session management endpoints
+│   ├── wizard.html          # Onboarding wizard + live dashboard SPA
+│   ├── calibrate_zones.py   # Zone calibration studio backend
+│   ├── _calib_ui.html       # Zone drawing UI
+│   └── run.sh               # Pipeline entrypoint
+├── app/
+│   ├── main.py              # FastAPI entrypoint + middleware
+│   ├── models.py            # Pydantic event schema (strict validation)
+│   ├── ingestion.py         # Ingest, dedup, partial success
+│   ├── sessionizer.py       # Raw events → VisitorSession objects
+│   ├── projections.py       # /metrics /funnel /heatmap /anomalies
+│   ├── correlation.py       # POS ↔ visitor session correlation
+│   ├── verifier.py          # Integrity checks + anomaly signals
+│   ├── replay.py            # Deterministic event replay engine
+│   └── audit.py             # Per-visitor audit timeline
+├── tests/
+│   └── test_layer2.py       # 20 tests, ~83% coverage (with AI prompt header)
+├── docs/
+│   ├── DESIGN.md            # Full architecture + AI-assisted decisions
+│   └── CHOICES.md           # 5 key decisions with full reasoning
+├── data/
+│   ├── clips/               # CCTV footage (gitignored)
+│   ├── calibration/         # Per-store zone JSON (committed)
+│   └── pos_transactions.csv # POS data for conversion correlation
+├── docker-compose.yml
+├── run.sh                   # GPU/CPU auto-detect + compose up
+└── README.md
+```
+
+---
+
+## Docs
+
+- [`docs/DESIGN.md`](docs/DESIGN.md) — Full architecture, every module, AI-assisted decisions
+- [`docs/CHOICES.md`](docs/CHOICES.md) — Detection model, Re-ID, schema, API storage, all reasoning
+- `http://localhost:8000/docs` — Live Swagger UI (auto-generated)

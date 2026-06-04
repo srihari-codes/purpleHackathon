@@ -785,8 +785,11 @@
   <div id="dashboard">
     <div id="dash-header">
       <h1>&#127978; Store Intelligence &mdash; Live Dashboard</h1>
+      <H2>This takes 5 seconds to load please wait...</H2>
       <div style="display:flex;align-items:center;gap:16px">
-        <span id="ws-badge" style="font-size:.75rem;padding:4px 10px;border-radius:20px;background:rgba(34,197,94,.1);color:var(--green);border:1px solid rgba(34,197,94,.3)">🟡 Connecting…</span>
+        <span id="ws-badge"
+          style="font-size:.75rem;padding:4px 10px;border-radius:20px;background:rgba(34,197,94,.1);color:var(--green);border:1px solid rgba(34,197,94,.3)">🟡
+          Connecting…</span>
         <div id="store-badge" style="font-size:.8rem;color:var(--muted)"></div>
       </div>
     </div>
@@ -1089,9 +1092,9 @@
         panel.className = 'cam-panel';
         panel.innerHTML =
           `<div class="cam-panel-lbl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:4px">` +
-            `<span style="font-weight:600">${c.camera_id}</span>` +
-            `<span id="ts-${c.camera_id}" style="font-size:.65rem;color:var(--purple-light);font-family:monospace;letter-spacing:.03em">&#x23F1; —</span>` +
-            `<span class="cam-role-badge ${ROLE_BADGE[c.role]}">${ROLE_LABELS[c.role]}</span>` +
+          `<span style="font-weight:600">${c.camera_id}</span>` +
+          `<span id="ts-${c.camera_id}" style="font-size:.65rem;color:var(--purple-light);font-family:monospace;letter-spacing:.03em">&#x23F1; —</span>` +
+          `<span class="cam-role-badge ${ROLE_BADGE[c.role]}">${ROLE_LABELS[c.role]}</span>` +
           `</div>` +
           `<img id="img-${c.camera_id}" src="" alt="${c.camera_id}" style="min-height:180px;background:#000">`;
         feeds.appendChild(panel);
@@ -1101,7 +1104,7 @@
       function makeWS(path, onMsg, label) {
         let ws, retryDelay = 500, retryTimer = null;
         function connect() {
-          if (ws) { try { ws.close(); } catch(_) {} }
+          if (ws) { try { ws.close(); } catch (_) { } }
           ws = new WebSocket('ws://' + location.host + path);
           ws.onopen = () => {
             retryDelay = 500;
@@ -1110,7 +1113,7 @@
           };
           ws.onmessage = e => {
             let d;
-            try { d = JSON.parse(e.data); } catch(_) { return; }
+            try { d = JSON.parse(e.data); } catch (_) { return; }
             // Ignore control messages
             if (d._type === 'ping' || d._type === 'connected') return;
             onMsg(d);
@@ -1121,10 +1124,10 @@
             retryTimer = setTimeout(connect, Math.min(retryDelay, 8000));
             retryDelay = Math.min(retryDelay * 2, 8000);
           };
-          ws.onerror = () => { try { ws.close(); } catch(_) {} };
+          ws.onerror = () => { try { ws.close(); } catch (_) { } };
         }
         connect();
-        return { close: () => { clearTimeout(retryTimer); try { ws && ws.close(); } catch(_) {} } };
+        return { close: () => { clearTimeout(retryTimer); try { ws && ws.close(); } catch (_) { } } };
       }
 
       // Frames WS — update image + running timestamp
@@ -1147,11 +1150,11 @@
       makeWS('/ws/events', ev => {
         if (ev._type === 'metrics') {
           document.getElementById('m-visitors').textContent = ev.active_visitors ?? '—';
-          document.getElementById('m-entries').textContent  = ev.total_entries  ?? '—';
-          document.getElementById('m-exits').textContent    = ev.total_exits    ?? '—';
-          document.getElementById('m-staff').textContent    = ev.staff_count    ?? '—';
-          document.getElementById('m-queue').textContent    = ev.queue_depth    ?? '—';
-          document.getElementById('m-events').textContent   = ev.total_events   ?? '—';
+          document.getElementById('m-entries').textContent = ev.total_entries ?? '—';
+          document.getElementById('m-exits').textContent = ev.total_exits ?? '—';
+          document.getElementById('m-staff').textContent = ev.staff_count ?? '—';
+          document.getElementById('m-queue').textContent = ev.queue_depth ?? '—';
+          document.getElementById('m-events').textContent = ev.total_events ?? '—';
           return;
         }
         const div = document.createElement('div');
@@ -1173,7 +1176,7 @@
             clearInterval(pollInterval);
             showCompletionBanner(s.error);
           }
-        } catch(_) {}
+        } catch (_) { }
       }, 2000);
     }
 

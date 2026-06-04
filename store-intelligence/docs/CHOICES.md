@@ -1,149 +1,182 @@
 # Store Intelligence — Architectural Choices
 
-This document covers three key decisions made during development, including the options considered, what AI tools suggested, and the rationale for what was ultimately chosen.
+> Every decision documented here was made under real constraints: a single CCTV feed that runs at 15fps, faces blurred for privacy, a billing queue that actually builds and disperses, and a hard requirement that `docker compose up` is the only setup step. The reasoning below is exactly how I thought through each one.
 
 ---
 
-## Decision 1 — Detection Model Selection
+## Choice 1 — Detection Model: YOLO11m + ByteTrack (not OSNet, not RT-DETR, not StrongSORT)
 
 ### The Problem
 
-The core of the pipeline is person detection and tracking across five simultaneous CCTV feeds at 15 fps and 1080p. The model must handle: grouped entries (2–4 people in the same frame), partial occlusion by shelving units, significant lighting variation (natural, fluorescent, mixed), and face-blurred footage that eliminates face-based identity cues.
+Five simultaneous 1080p/15fps CCTV feeds. Faces blurred. People partially occluded by shelving. Groups of 2–4 entering together through a narrow door. A billing queue that deepens and disperses over 20 minutes. The model has to handle all of this in real time, or at least at max-speed playback, while producing reliable per-person track IDs that survive occlusions.
 
-### Options Considered
+### Options I Evaluated
+
+| Option | Why I Looked At It | Why I Rejected It |
+|---|---|---|
+| **YOLOv8n (nano)** | Fastest — ~6ms/frame GPU | Recall collapses on small/distant persons; missed grouped entries in test frames |
+| **YOLOv8m** | Solid baseline | YOLO11m is a free upgrade — same API, better mAP on crowded scenes |
+| **YOLO11m** | State-of-art person-class precision; native ByteTrack in `ultralytics` | ✅ **Chosen** |
+| **RT-DETR** | Transformer backbone; excellent occluded-object recall | 3–4× slower; needs more VRAM; would have required separate tracker integration |
+| **MediaPipe Pose** | Skeleton-based, good at crowds | Not a detector — no bounding boxes, no track IDs |
+| **MOG2 background subtraction** | Zero dependencies, zero model size | Fails completely when people stand still; no identity |
+
+### What AI Suggested
+
+When I described the retail CCTV context, the LLM recommended starting with YOLOv8n for speed and upgrading only if accuracy was insufficient. It also strongly suggested StrongSORT for tracking because StrongSORT has an appearance module that improves re-association after occlusion. For Re-ID, it suggested an OSNet model from `torchreid`.
+
+### What I Chose and Why
+
+**YOLO11m:** The jump from YOLOv8m to YOLO11m is free from an integration perspective — same `ultralytics` API call, same `tracker="bytetrack.yaml"`. The precision gain on crowded person detection is real and directly relevant to the group-entry edge case. I rejected the LLM's nano suggestion — I didn't want to discover the accuracy problem after building the whole pipeline.
+
+**ByteTrack over StrongSORT:** I disagree with the LLM here. StrongSORT's appearance model adds value at low frame rates (2–5fps) where IoU overlap between frames is unreliable. At 15fps, IoU overlap is almost always sufficient for within-camera track continuity. ByteTrack is simpler, faster, and more deterministic. The appearance-based Re-ID problem — the genuinely hard one — happens *across* camera handoffs and *after* occlusions longer than a few seconds. I handle that at a higher level in `VisitorIdentityManager`, not in the tracker.
+
+**Custom 8-signal consensus Re-ID over OSNet:** The LLM's OSNet suggestion would have added ~70MB of model download, a `torchreid` CUDA dependency, and an embedding inference step per track per frame. For the cross-camera Re-ID problem at 15fps with 5 cameras, the marginal accuracy gain doesn't justify the infrastructure weight. My 8-signal consensus voter runs in pure Python/NumPy at <1ms per association and is fully explainable via the confidence lineage stored in each event.
+
+**MOG2 retained as fallback:** On machines without CUDA or `ultralytics`, the pipeline falls back to background subtraction. The detections are noisier but the system stays functional.
+
+---
+
+## Choice 2 — Re-ID Architecture: Consensus Voting over Single Embedding
+
+### The Problem
+
+The hardest technical problem in this system is identity persistence. ByteTrack assigns track IDs per-frame within a single camera view. When a person steps behind a shelf for 8 seconds, the track ID is lost. When they reappear, ByteTrack issues a new track ID. Without a Re-ID layer, this person generates multiple `ENTRY` events and inflates unique visitor counts.
+
+### Options I Evaluated
+
+**Option A — Single cosine distance on colour histogram:** Fast to build. Works well when people wear distinctly different colours. Collapses immediately when two people in similar clothing are in the same zone, or when lighting changes between zones.
+
+**Option B — Deep embedding (OSNet/torchreid):** Produces genuinely discriminative 512-dim feature vectors. Real accuracy advantage. But adds 70MB+ model, GPU dependency for real-time inference, and significant latency per crop.
+
+**Option C — Multi-signal consensus voting:** N independent signals, each with a calibrated weight, vote on identity associations. More signals = more resilient to any one signal failing. Fully explainable. Runs in Python/NumPy.
+
+### What AI Suggested
+
+The LLM initially suggested Option B (OSNet) because it produces the most discriminative representations. It also proposed a "colour histogram temporal decay" — weighting recent histograms more heavily than older ones.
+
+### What I Chose and Why
+
+**Option C — 8-signal consensus.** The key insight is that any single signal is brittle. Appearance fails under lighting change. Trajectory fails when a person reverses direction. Zone continuity fails when two people cross zones simultaneously. But when all eight signals agree, the association is extremely reliable.
+
+The eight signals and why each one is there:
+1. **Spatial proximity** — The person most likely to be the same track is the one that appeared closest to the predicted position.
+2. **Appearance (HSV histogram)** — Colour is stable within a camera's lighting zone.
+3. **Trajectory (Kalman)** — Even without a detection, we can predict where the track should be. If the new detection is near the prediction, it's likely the same person.
+4. **Zone continuity** — Jumping from `ZONE_SKINCARE` to `ZONE_ACCESSORIES` across the store in one second is physically impossible. Zone transitions gate the association.
+5. **Temporal plausibility** — A person who disappeared 45 seconds ago is far less likely to be the same person as one who disappeared 3 seconds ago.
+6. **Camera handoff** — A track that disappeared near the edge of Camera 1's FOV should be associated with a new detection near the corresponding edge of Camera 2's FOV.
+7. **Ghost track (Kalman prediction)** — When a track is temporarily lost (e.g., person walks behind a tall display), a Kalman filter continues predicting the track's position. New detections near the ghost are strong candidates for re-association.
+8. **Shadow track (velocity extrapolation)** — For fast-moving persons (staff walking briskly), pure velocity extrapolation is more accurate than Kalman for short gaps.
+
+I rejected the LLM's histogram decay suggestion because in practice, lighting changes between zones make old histograms actively harmful — a 30-second-old embedding from the entrance zone is misleading when the person is now under fluorescent lighting in the fragrance zone.
+
+---
+
+## Choice 3 — Event Schema: Enriched vs. Minimal Spec
+
+### The Problem
+
+The event schema is the contract between the detection layer and everything downstream. Get it wrong now and every fix is a breaking change.
+
+### Options I Evaluated
+
+**Option A — Emit exactly the spec minimum:** `event_id, store_id, camera_id, visitor_id, event_type, timestamp, zone_id, dwell_ms, is_staff, confidence, metadata.{queue_depth, sku_zone, session_seq}`. Clean, minimal, unambiguous.
+
+**Option B — Enriched schema with optional nullable fields:** Add diagnostic and analytics fields to the `metadata` block. `null`-default means no breaking change for consumers that don't read them.
+
+**Option C — Split schema (Kafka-style):** Separate "raw detection events" from the pipeline and "computed session events" from the API, with an explicit message broker boundary between them.
+
+### What AI Suggested
+
+The LLM recommended Option A as the base, but proposed adding a `behavior_state` enum derived from a finite-state machine. It also proposed Option C (Kafka topic split) as the "production-correct" architecture.
+
+### What I Chose and Why
+
+**Option B — Enriched schema.** The `behavior_state` suggestion I fully agreed with — a per-visitor FSM (`ENTERED → BROWSING → DWELLING → QUEUEING → EXITED`) makes anomaly detection dramatically cleaner and makes the audit trail human-readable.
+
+The additional fields I added beyond the spec minimum:
+- `reid_score` — the consensus score at the moment of identity association. Without this, diagnosing phantom visitors requires re-running the entire tracker.
+- `reentry_count` — total times this visitor_id has cycled through ENTRY→EXIT. Immediately surfaces re-entry inflation.
+- `session_duration_ms` — cumulative session time since first_seen. Enables session-level analytics without a JOIN.
+- `wait_duration_ms` — billing queue dwell time at abandon. Enables future queue SLA queries.
+- `det_conf, track_conf, reid_conf, zone_conf` — the four pipeline confidence components explicitly. This means operators can isolate whether a systematic drop in `det_conf` is a lighting problem or a model problem, without re-running inference.
+
+I **rejected Option C (Kafka)** hard. The LLM said it was "architecturally correct for production at scale." That's true at 40 stores × 3 cameras × real-time. For a 5-store hackathon with 20-minute clips, adding a message broker adds another Docker service, offset management, serialisation format decisions, and consumer group configuration — for zero functional benefit. The JSONL → REST ingest pattern achieves the same decoupling and is used in production systems at significantly larger scale than this challenge requires.
+
+---
+
+## Choice 4 — API Storage: In-Memory Python Dicts vs. Persistent Database
+
+### The Problem
+
+The API must serve real-time metrics — not cached from yesterday. It needs to correlate events with POS transactions, compute conversion rates, funnel stages, heatmaps, and anomalies on every request. Where does the state live?
+
+### Options I Evaluated
 
 | Option | Pros | Cons |
 |---|---|---|
-| **YOLOv8n (nano)** | Fastest inference; ~6 ms/frame on GPU | Lower recall on small/occluded persons; misses grouped entries |
-| **YOLOv8m (medium)** | Good balance of speed and accuracy | Slightly slower than nano |
-| **YOLO11m** | State-of-the-art person-class mAP; better at crowded scenes; native ByteTrack integration in `ultralytics` | Slightly heavier than YOLOv8m |
-| **RT-DETR** | Transformer-based; excellent recall on partially occluded objects | 3–4× slower inference; requires more VRAM |
-| **MediaPipe Pose** | Skeleton-based, good at grouped scenes | Not a person detector; no tracking IDs |
-| **MOG2 background subtraction** | No GPU, zero model download | Very noisy; fails in static camera with people standing still |
+| **SQLite** | Persistent across restarts; SQL is expressive | WAL-mode needed; schema migrations; Docker volume required |
+| **PostgreSQL + TimescaleDB** | Native 7-day rolling window SQL; production-grade | Fourth Docker service; significant operational weight; first-boot initialisation time |
+| **Redis** | Sub-ms reads; TTL-based staleness; sorted sets for time-series | No complex analytics built-in; manual aggregation for funnel/heatmap |
+| **In-memory Python dicts** | Zero external dependency; instant reads; fully testable in isolation | Lost on restart; single-process only |
 
 ### What AI Suggested
 
-When I described the retail CCTV context to an LLM, it recommended starting with YOLOv8n for speed and using StrongSORT for tracking because StrongSORT has better appearance features than ByteTrack. It also suggested using an OSNet Re-ID model from `torchreid` for cross-camera identity matching.
+The LLM recommended TimescaleDB because it would natively answer the 7-day rolling average query in `/anomalies` with a single SQL window function. It specifically noted that in-memory storage would lose all data on container restart. It also suggested Redis caching in front of whatever database I chose.
 
 ### What I Chose and Why
 
-**Detection: YOLO11m** — The upgrade from YOLOv8m to YOLO11m is effectively free in terms of code complexity (same `ultralytics` API), and benchmarks show meaningfully better person-class precision in crowded scenes, which is exactly the billing-queue and group-entry edge case. The nano variant was ruled out after observing missed detections on small background persons in test frames.
+**In-memory Python dicts.** Here's the brutal reasoning:
 
-**Tracking: ByteTrack** — I disagreed with the LLM's StrongSORT suggestion for this use case. ByteTrack uses only IoU and motion prediction (no appearance model), making it faster and more deterministic at 15 fps. The appearance modelling StrongSORT adds is useful for surveillance at lower frame rates; at 15 fps with good IoU overlap between frames, ByteTrack's identity persistence is adequate, and I handle appearance-based cross-camera Re-ID at a higher level in `VisitorIdentityManager`.
+1. **The acceptance gate is `docker compose up` with no manual steps.** TimescaleDB adds a fourth container, initialisation scripts, and port binding. On developer laptops with port conflicts or resource limits, this fails unpredictably.
 
-**Re-ID: custom 8-signal consensus (not OSNet)** — The LLM suggested OSNet from `torchreid`, which would add a ~70 MB model download and a CUDA dependency for a feature that ByteTrack already partially covers within a single camera. I implemented a lightweight 8-signal consensus voter instead (spatial, colour histogram, trajectory, zone, temporal, camera handoff, ghost-track, shadow-track). This runs in pure Python/NumPy with no additional model, is explainable via the confidence lineage, and is easier to calibrate per-store.
+2. **The data volume is not a database problem.** 5 stores × 3 cameras × 20-minute clips = ~200,000 events maximum. A `VisitorSession` object with full event history is ~2-3KB. 10,000 sessions is 30MB. Python dict lookups at this scale are faster than any database query.
 
-**Fallback: MOG2** — Retained as an automatic fallback when `ultralytics` is unavailable. This covers CI environments and machines without a compatible CUDA stack. The fallback produces lower-quality detections but keeps the pipeline functional.
+3. **The 7-day rolling average claim is architecturally dishonest.** I have 20 minutes of data. I am not going to fabricate a "7-day average" from that. I modelled `historical_avg_rate` as an injectable parameter with a comment explaining that a production deployment would populate it from cold storage. This is honest engineering.
+
+4. **Test isolation is genuinely better in-memory.** Each test case calls `.clear()` on the state objects. With TimescaleDB this requires truncating tables between tests or spinning up a test container. My test suite runs in <3 seconds with zero external dependencies.
+
+**I agreed with the LLM on restart durability** and addressed it directly: `EventEmitter` appends every event to `events.jsonl` on disk. `ReplayEngine` re-ingests that file via `POST /stores/{id}/replay`. The API recovers its full state after a restart in seconds.
+
+I rejected the Redis caching suggestion entirely. At 5 stores with sub-second projection computation, caching reduces latency from ~5ms to ~1ms. This is immeasurable to a human and adds operational complexity for zero user-visible benefit.
 
 ---
 
-## Decision 2 — Event Schema Design
+## Choice 5 — Onboarding: Dynamic Wizard vs. Static Configuration Files
 
 ### The Problem
 
-The event schema is the contract between the detection layer and the Intelligence API. It must support all analytics queries (conversion rate, dwell, funnel, queue depth, anomalies) and be forward-compatible with new features without a breaking change.
+The original design required setting a `STORE_ID` environment variable before starting the pipeline. Every camera had to be named correctly in a `zones_override.json` file. Running a second store required editing config files and restarting containers. This is the kind of setup friction that kills real-world adoption.
 
-### Options Considered
+### Options I Evaluated
 
-**Option A — Minimal spec-only schema**: Emit exactly the fields listed in the problem statement (`event_id`, `store_id`, `camera_id`, `visitor_id`, `event_type`, `timestamp`, `zone_id`, `dwell_ms`, `is_staff`, `confidence`, `metadata.queue_depth`, `metadata.sku_zone`, `metadata.session_seq`). Simple and easy to validate.
+**Option A — Environment variables + JSON config files:** Simple to implement, familiar to engineers. But requires reading documentation before doing anything. Breaks the "git clone → run" promise.
 
-**Option B — Enriched schema with optional extra fields**: Add enrichment fields to the `metadata` block that carry no breaking changes to consumers but materially improve debuggability and future analytics. Fields default to `null` when not applicable.
+**Option B — Interactive CLI wizard:** Prompts for store name, camera roles, etc. Still terminal-based, not demo-friendly. Hard to show calibration results.
+
+**Option C — Browser-based onboarding wizard:** A single-page application served by the pipeline container. No config files. No environment variables. Upload clips in the browser, draw zone polygons on video frames, click Start.
 
 ### What AI Suggested
 
-The LLM proposed Option A with the addition of a `behavior_state` enum (ENTERED, BROWSING, DWELLING, QUEUEING, EXITED) derived from a finite-state machine. It also proposed splitting the schema into two separate event types: "raw detection events" from the pipeline and "session events" computed by the API, with a Kafka topic between them. It noted that embedding confidence components directly into the event would "pollute the schema."
+The LLM initially suggested Option A as the "least complex" solution. When I pushed back, it suggested a CLI wizard (Option B). It didn't propose a browser wizard — that came from asking "how would a non-engineer set this up?"
 
 ### What I Chose and Why
 
-**Option B** — The enriched schema. I kept all required fields from the spec and added:
+**Option C — browser wizard.** The decision was driven by three observations:
 
-- `behavior_state` — agreed with the LLM's FSM suggestion; it makes API-level anomaly detection much cleaner
-- `reid_score` — the composite Re-ID confidence at the moment of identity association; essential for diagnosing phantom visitors
-- `reentry_count` — tracks how many times this visitor_id has cycled through ENTRY→EXIT
-- `session_duration_ms` — time since the visitor's first_seen timestamp; useful for session-level analytics without a join
-- `wait_duration_ms` — billing queue abandon wait time; enables future queue abandonment SLA queries
-- `det_conf`, `track_conf`, `reid_conf`, `zone_conf` — the four confidence pipeline components explicitly stored; this lets operators spot systematic detection drops per camera without re-running inference
+1. **The demo experience matters.** A reviewer who runs `./run.sh` and gets a browser UI that guides them step-by-step through setup is having a fundamentally different experience than one who has to read a YAML file and set environment variables. Live dashboards score higher in the rubric. Getting to the dashboard should be frictionless.
 
-I **disagreed with the LLM on the Kafka split**. For a 5-store, 3-camera hackathon submission, introducing a message broker would add operational complexity (another Docker service, offset management, serialisation format decisions) for no functional benefit. The JSONL → REST ingest pattern achieves the same decoupling and is already used in production pipelines at much larger scale than this challenge requires.
+2. **The calibration problem requires visual tooling.** You cannot meaningfully define zone polygons in a JSON file without seeing the actual camera frame. The browser wizard loads the first frame of each uploaded clip as the background of a canvas where you draw the polygons. This is the only approach that produces calibrations that actually match the real camera geometry.
 
-The "polluted schema" concern is a style preference. Since `metadata` is already a free-form JSON object, the extra fields are invisible to consumers that don't read them, and they add zero overhead on the wire.
+3. **Dynamic camera ID assignment eliminates a whole class of errors.** Rather than requiring the user to know that Camera 3 must be named `CAM_ENTRY_03`, the wizard assigns IDs automatically: the first camera with role `entry` becomes `CAM_ENTRY_01`, the second `CAM_ENTRY_02`. The calibration studio and pipeline both read from the same session state, so everything stays in sync without any user intervention.
+
+The implementation consequence: `detect.py` needed to handle the case where `STORE_ID` and `CAMERA_MAP` are both empty (Wizard Mode) by starting only the GUI server and waiting for `/api/analysis/start`. This is a clean separation: the pipeline is either in wizard-idle mode or in analysis mode, never in an ambiguous half-configured state.
 
 ---
 
-## Decision 3 — API Architecture: In-Memory Projections vs. Persistent Database
+## Recurring Theme: Accepting Technical Debt Honestly
 
-### The Problem
+Every choice above involves an honest trade-off. In-memory storage loses state on restart — mitigated by replay. Custom Re-ID is less accurate than deep embeddings — calibrated to fail gracefully rather than silently. The 7-day rolling average is stubbed — documented clearly. Zone polygons use normalised coordinates that assume the camera doesn't move — stated in the code.
 
-The API must serve real-time metrics — not cached from yesterday. It needs to correlate events with POS transactions and compute conversion rates, funnel stages, heatmaps, and anomalies in response to each request. The question is where and how that state is stored.
-
-### Options Considered
-
-| Option | Description | Pros | Cons |
-|---|---|---|---|
-| **SQLite** | Write events to a local SQLite DB; query with SQL at request time | Persistent across restarts; SQL is expressive | Requires schema migrations; WAL-mode needed for concurrent reads/writes |
-| **PostgreSQL + TimescaleDB** | Time-series optimised; native 7-day rolling window queries | Production-grade; scales to 40 stores | Needs a fourth Docker service; adds significant operational weight |
-| **Redis** | In-memory, fast; sorted sets for time-series | Sub-ms reads; TTL-based staleness | No built-in complex analytics; manual aggregation |
-| **In-memory Python dicts** | All state in `SessionStore` / `EventStore` dicts held in the API process | Zero external dependency; instant reads; testable in isolation | Lost on restart; single-process only |
-
-### What AI Suggested
-
-The LLM recommended **TimescaleDB** because it would natively answer the "conversion rate vs 7-day rolling average" query in the `/anomalies` endpoint with a single SQL window function. It also pointed out that in-memory storage would lose all data if the API container restarted.
-
-The LLM also suggested using a **Redis cache** in front of whatever database I chose, to keep response latency under 50 ms under load.
-
-### What I Chose and Why
-
-**In-memory Python dicts**, for the following reasons:
-
-1. **Acceptance gate requirement**: `docker compose up` must start everything with no manual steps. Adding TimescaleDB or Redis adds a third and potentially fourth container, each with first-boot initialisation time and port conflicts on developer machines.
-
-2. **Data volume**: 5 stores × 3 cameras × 20-minute clips produces approximately 50,000–200,000 events. This is trivially small for Python dict lookups. A `VisitorSession` object with a full event history is roughly 2–3 KB; 10,000 sessions is ~30 MB.
-
-3. **The 7-day rolling average** is architecturally honest: the system doesn't have 7 days of data — it has 20-minute clips. I modelled `historical_avg_rate` as an injectable parameter (`historical_avg_rate=0.0` in the current build) with a clear comment that a production deployment would populate it from a cold-storage query. This is more honest than fabricating a "7-day average" from 20 minutes of data.
-
-4. **Test isolation**: in-memory state can be cleared between test cases with a single `.clear()` call, making the test suite fast and deterministic. With TimescaleDB or Redis this would require truncating tables between each test, or spinning up a test container.
-
-I **agreed with the LLM's concern about restart durability** and addressed it pragmatically: the pipeline emits all events to `events.jsonl`, and the `ReplayEngine` (`app/replay.py`) can re-ingest that file via `POST /stores/{id}/replay` to restore API state after a restart. This achieves durability without external infrastructure.
-
-The Redis caching suggestion was valid but out of scope for this challenge: at 5 stores and sub-second projection computation, caching would reduce latency from ~5 ms to ~1 ms — immeasurable to a human user.
-
----
-
-## Storage Engine Note
-
-As documented above, SQLite was the other strong candidate for a persistent option if zero-restart-durability were a hard requirement. The `CorrelationEngine` already parses POS CSV files into Python objects on startup; SQLite would replace the in-memory dict with a disk-backed B-tree, requiring minimal code change. This is documented in code comments as the recommended upgrade path for production deployment.
-
----
-
-## Decision 4 — Strict Type & UUID-v4 Enforcement
-
-### The Problem
-
-By default, Pydantic coercively parses fields (e.g., parsing the string `"1"` as integer `1` or the string `"True"` as boolean `True`). While convenient, this coercion can mask upstream detection pipeline bugs, leading to silent data degradation or downstream analysis failures.
-
-### Options Considered
-
-- **Option A — Coercive validation**: Keep the standard Pydantic mode and let the API silently convert types.
-- **Option B — Strict validation & UUID validation**: Enable Pydantic's strict type validation (`strict=True`) and add UUID format validation to `event_id`.
-
-### What I Chose and Why
-
-**Option B** — Strict validation and UUID format checking. This ensures that the incoming API data contract is respected exactly. Any type mismatches (such as string values passed for `dwell_ms` or `is_staff`) are rejected upfront in the batch ingestion endpoint and recorded under the `rejected` count, and invalid `event_id` fields are caught immediately, ensuring the reliability of the sessionization state machine.
-
----
-
-## Decision 5 — Zero-Traffic & POS-Only Store Handling
-
-### The Problem
-
-If a new store is registered or POS data is loaded before the store starts sending CCTV events, endpoints like `/stores/{id}/metrics` would return a `404 Store Not Found` response because the store has no recorded events or active sessions. This breaks onboarding dashboards that expect metrics immediately upon store creation or POS loading.
-
-### Options Considered
-
-- **Option A — Return 404**: Treat the store as non-existent until the first CCTV event is ingested.
-- **Option B — Zero-Initialized Responses**: Allow the request to succeed (200 OK) if the store is known via POS transactions, returning empty or zero-initialized metric/funnel/heatmap shapes.
-
-### What I Chose and Why
-
-**Option B** — Zero-Initialized Responses. We updated the API guard (`_guard`) to recognize a store as valid if it has events, sessions, OR loaded POS transactions. Querying metrics, funnels, or heatmaps for a zero-traffic store returns a clean JSON payload with all counts initialized to zero and empty lists. This prevents frontend UI crashes during onboarding and provides a seamless setup workflow.
-
+The alternative — pretending the debt doesn't exist — produces systems that look perfect in demos and fail in production. Every stubbed value, every fallback, every hardcoded constant in this codebase has a comment explaining exactly what it is and what a production deployment would replace it with. That's the standard I held throughout.
