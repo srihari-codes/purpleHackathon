@@ -35,12 +35,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _HERE = Path(__file__).parent
 _PROJECT_ROOT = _HERE.parent
-_DEFAULT_STORE = "STORE_BLR_002"
+_DEFAULT_STORE = os.environ.get("STORE_ID", "")
 _OVERRIDE_JSON = _HERE / "zones_override.json"
 
 # Calibration JSON search order:
 # 1. CALIB_DIR env var (explicit override)
-# 2. /data/calibration/  — Docker shared volume (both pipeline + calibrate containers)
+# 2. /data/calibration/  — Docker shared volume
 # 3. data/calibration/ — relative data directory
 # 4. config/calibration/ — local dev / host path
 _CALIB_DIR_CANDIDATES = []
@@ -57,14 +57,14 @@ def _find_calib_dir() -> Path:
     for c in _CALIB_DIR_CANDIDATES:
         if c.exists():
             return c
-    # Default fallback
     default = _PROJECT_ROOT / "data" / "calibration"
     default.mkdir(parents=True, exist_ok=True)
     return default
 
 _CALIB_DIR = _find_calib_dir()
 
-
+# Camera IDs are now dynamic — loaded from the calibration JSON, not hardcoded.
+# (Legacy CAMERA_IDS constant removed)
 
 # Role constants
 ROLE_ZONE            = "zone"
@@ -75,14 +75,6 @@ ROLE_BILLING_COUNTER = "billing_counter"
 ROLE_QUEUE_AREA      = "queue_area"
 ROLE_STAFF_AREA      = "staff_area"
 
-# Camera canonical IDs
-CAMERA_IDS = [
-    "CAM_FLOOR_01",
-    "CAM_FLOOR_02",
-    "CAM_ENTRY_03",
-    "CAM_GODOWN_04",
-    "CAM_BILLING_05",
-]
 
 
 def _hex_to_bgr(hex_color: str) -> Tuple[int, int, int]:
@@ -192,45 +184,42 @@ class ZoneMapper:
             with open(_OVERRIDE_JSON, "r") as f:
                 override = json.load(f)
 
-            # Convert legacy format to new shape dicts
-            ROLE_FOR_CAM = {
-                "CAM_FLOOR_01": ROLE_ZONE,
-                "CAM_FLOOR_02": ROLE_ZONE,
-                "CAM_ENTRY_03": ROLE_ZONE,
-                "CAM_GODOWN_04": ROLE_STAFF_AREA,
-                "CAM_BILLING_05": ROLE_ZONE,
-            }
+            # Determine camera IDs from the override file itself (not hardcoded)
+            cameras_in_override = [
+                k for k in override.keys()
+                if isinstance(override[k], list) and k != "entry_line_norm"
+            ]
+
             with self._lock:
                 self._shapes_by_cam = {}
-                for cam_id in CAMERA_IDS:
+                for cam_id in cameras_in_override:
                     shapes = []
                     for z in override.get(cam_id, []):
                         b, g, r = z.get("color_bgr", [0, 255, 128])
                         shapes.append({
                             "shape_id": z["zone_id"],
                             "shape_type": "polygon",
-                            "role": ROLE_FOR_CAM.get(cam_id, ROLE_ZONE),
+                            "role": ROLE_ZONE,
                             "label": z.get("sku_zone", z["zone_id"]),
                             "points": z["polygon_norm"],
                             "color": f"#{r:02X}{g:02X}{b:02X}",
                             "enabled": True,
                         })
-                    # Also handle entry_line_norm
-                    if cam_id == "CAM_ENTRY_03":
-                        entry_lines = override.get("entry_line_norm", {})
-                        if cam_id in entry_lines:
-                            val = entry_lines[cam_id]
-                            if isinstance(val, list) and len(val) == 2:
-                                shapes.append({
-                                    "shape_id": "ENTRY_LINE",
-                                    "shape_type": "line",
-                                    "role": ROLE_ENTRY_LINE,
-                                    "label": "ENTRY_DOOR",
-                                    "points": val,
-                                    "color": "#FF0033",
-                                    "enabled": True,
-                                    "meta": {"inside_is": "below"},
-                                })
+                    # Handle entry_line_norm for any camera that has one
+                    entry_lines = override.get("entry_line_norm", {})
+                    if cam_id in entry_lines:
+                        val = entry_lines[cam_id]
+                        if isinstance(val, list) and len(val) == 2:
+                            shapes.append({
+                                "shape_id": "ENTRY_LINE",
+                                "shape_type": "line",
+                                "role": ROLE_ENTRY_LINE,
+                                "label": "ENTRY_DOOR",
+                                "points": val,
+                                "color": "#FF0033",
+                                "enabled": True,
+                                "meta": {"inside_is": "below"},
+                            })
                     if shapes:
                         self._shapes_by_cam[cam_id] = shapes
             logger.info("ZoneMapper: loaded legacy zones_override.json")
@@ -374,12 +363,30 @@ _mapper: Optional[ZoneMapper] = None
 _mapper_lock = threading.Lock()
 
 
-def get_mapper(store_id: str = _DEFAULT_STORE) -> ZoneMapper:
+def _default_store_id() -> str:
+    """Get store_id from env var. Raises if not set."""
+    sid = os.environ.get("STORE_ID", "").strip()
+    if not sid:
+        raise RuntimeError(
+            "STORE_ID environment variable is not set. "
+            "Pass store_id explicitly or set STORE_ID."
+        )
+    return sid
+
+
+def get_mapper(store_id: Optional[str] = None) -> ZoneMapper:
     """Return the module-level ZoneMapper singleton."""
     global _mapper
     with _mapper_lock:
-        if _mapper is None:
-            _mapper = ZoneMapper(store_id)
+        resolved = store_id or os.environ.get("STORE_ID", "").strip()
+        if not resolved:
+            logger.warning(
+                "ZoneMapper: STORE_ID not set — calibration will not load. "
+                "Pass store_id or set STORE_ID env var."
+            )
+            resolved = "_unknown_"
+        if _mapper is None or _mapper._store_id != resolved:
+            _mapper = ZoneMapper(resolved)
     return _mapper
 
 

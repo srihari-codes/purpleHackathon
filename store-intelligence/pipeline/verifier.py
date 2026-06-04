@@ -8,7 +8,7 @@ Usage:
     from verifier import CalibrationVerifier
     v = CalibrationVerifier()
     errors = v.validate_dict(calib_dict)
-    errors = v.validate_file("config/calibration/STORE_BLR_002.json")
+    errors = v.validate_file("data/calibration/MY_STORE.json")
     # errors: list of {"severity": "ERROR"|"WARNING"|"INFO", "shape_id": ..., "camera_id": ..., "message": ...}
 """
 
@@ -240,22 +240,38 @@ class CalibrationVerifier:
         enabled_shapes = [s for s in shapes if s.get("enabled", True)]
         roles_present = {s.get("role") for s in enabled_shapes}
 
-        # ── Per-camera role requirements ──────────────────────────────────
+        # ── Per-camera role requirements — based on roles present, not camera ID ────
+        # A camera with role='entry_line' shapes must have an entry_line.
+        # A camera with billing/queue shapes must have those roles properly defined.
 
-        if cam_id == "CAM_ENTRY_03":
-            if "entry_line" not in roles_present:
+        # Check: if any shape suggests this is an entry camera, it must have entry_line
+        is_entry_cam = any(
+            s.get("role") in {"inside_region", "outside_region"}
+            or "ENTRY" in s.get("shape_id", "").upper()
+            or "ENTRY" in cam_id.upper()
+            for s in enabled_shapes
+        )
+        # Also check if camera_id naming suggests it's an entry camera
+        if is_entry_cam or "ENTRY" in cam_id.upper():
+            if "entry_line" not in roles_present and enabled_shapes:
                 errors.append(_err(cam_id, None, "MISSING_ENTRY_LINE",
-                                   "CAM_ENTRY_03 must have a shape with role='entry_line'",
-                                   SEVERITY_ERROR))
+                                   f"{cam_id}: entry camera should have a shape with role='entry_line'",
+                                   SEVERITY_WARNING))
 
-        if cam_id == "CAM_BILLING_05":
+        # Check: if camera has billing shapes, require both billing_counter and queue_area
+        is_billing_cam = (
+            "BILLING" in cam_id.upper()
+            or "billing_counter" in roles_present
+            or "queue_area" in roles_present
+        )
+        if is_billing_cam:
             if "billing_counter" not in roles_present:
                 errors.append(_err(cam_id, None, "MISSING_BILLING_COUNTER",
-                                   "CAM_BILLING_05 must have a shape with role='billing_counter'",
+                                   f"{cam_id}: billing camera should have a shape with role='billing_counter'",
                                    SEVERITY_WARNING))
             if "queue_area" not in roles_present:
                 errors.append(_err(cam_id, None, "MISSING_QUEUE_AREA",
-                                   "CAM_BILLING_05 must have a shape with role='queue_area'",
+                                   f"{cam_id}: billing camera should have a shape with role='queue_area'",
                                    SEVERITY_WARNING))
 
         # ── Multiple conflicting roles ─────────────────────────────────────

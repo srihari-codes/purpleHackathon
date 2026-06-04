@@ -15,7 +15,7 @@ Camera transition probability accounts for:
 
 import logging
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from config import cfg
 
@@ -103,46 +103,84 @@ ZONE_TRANSITIONS: Dict[Tuple[str, str], float] = {
 }
 
 # ---------------------------------------------------------------------------
-# Camera topology — camera-to-camera transition probability matrix
+# Camera topology — populated at runtime by the wizard via set_camera_topology().
 # Format: (cam_from, cam_to) → (base_prob, expected_transit_sec, tolerance_sec)
 # ---------------------------------------------------------------------------
-CAMERA_TRANSITIONS: Dict[Tuple[str, str], Tuple[float, float, float]] = {
-    # Camera 1 ↔ Camera 2 (overlapping floor coverage)
-    ("CAM_FLOOR_01", "CAM_FLOOR_02"): (0.80, 4.0, 5.0),
-    ("CAM_FLOOR_02", "CAM_FLOOR_01"): (0.80, 4.0, 5.0),
-    # Camera 3 (entrance) ↔ Camera 1 (main floor entry side)
-    ("CAM_ENTRY_03", "CAM_FLOOR_01"): (0.85, 3.0, 4.0),
-    ("CAM_FLOOR_01", "CAM_ENTRY_03"): (0.70, 3.0, 4.0),
-    # Camera 2 ↔ Camera 5 (floor → billing)
-    ("CAM_FLOOR_02", "CAM_BILLING_05"): (0.65, 4.0, 5.0),
-    ("CAM_BILLING_05","CAM_FLOOR_02"):  (0.65, 4.0, 5.0),
-    # Camera 2 ↔ Camera 4 (staff movement)
-    ("CAM_FLOOR_02", "CAM_GODOWN_04"): (0.30, 6.0, 8.0),
-    ("CAM_GODOWN_04","CAM_FLOOR_02"):  (0.30, 6.0, 8.0),
-    # Low-probability long jumps (still possible)
-    ("CAM_FLOOR_01", "CAM_BILLING_05"): (0.20, 8.0, 10.0),
-    ("CAM_ENTRY_03", "CAM_BILLING_05"): (0.15, 10.0, 12.0),
-}
+CAMERA_TRANSITIONS: Dict[Tuple[str, str], Tuple[float, float, float]] = {}
 
-# Camera "distance" in hops — used for simultaneous-presence anomaly detection
-CAMERA_HOP_DISTANCE: Dict[Tuple[str, str], int] = {
-    ("CAM_FLOOR_01", "CAM_FLOOR_02"): 1,
-    ("CAM_FLOOR_02", "CAM_FLOOR_01"): 1,
-    ("CAM_ENTRY_03", "CAM_FLOOR_01"): 1,
-    ("CAM_FLOOR_01", "CAM_ENTRY_03"): 1,
-    ("CAM_FLOOR_02", "CAM_BILLING_05"): 1,
-    ("CAM_BILLING_05", "CAM_FLOOR_02"): 1,
-    ("CAM_FLOOR_02", "CAM_GODOWN_04"): 1,
-    ("CAM_GODOWN_04", "CAM_FLOOR_02"): 1,
-    ("CAM_ENTRY_03", "CAM_FLOOR_02"): 2,
-    ("CAM_FLOOR_02", "CAM_ENTRY_03"): 2,
-    ("CAM_FLOOR_01", "CAM_BILLING_05"): 2,
-    ("CAM_BILLING_05", "CAM_FLOOR_01"): 2,
-    ("CAM_ENTRY_03", "CAM_BILLING_05"): 3,
-    ("CAM_BILLING_05", "CAM_ENTRY_03"): 3,
-    ("CAM_FLOOR_01", "CAM_GODOWN_04"): 2,
-    ("CAM_GODOWN_04", "CAM_FLOOR_01"): 2,
-}
+# Camera "distance" in hops — used for simultaneous-presence anomaly detection.
+# Format: (cam_from, cam_to) → hop_count
+CAMERA_HOP_DISTANCE: Dict[Tuple[str, str], int] = {}
+
+
+def set_camera_topology(
+    adjacency: Dict[str, Set[str]],
+    role_map: Optional[Dict[str, str]] = None,
+    transit_overrides: Optional[Dict[Tuple[str, str], Tuple[float, float, float]]] = None,
+) -> None:
+    """
+    Build CAMERA_TRANSITIONS and CAMERA_HOP_DISTANCE from wizard-supplied topology.
+
+    adjacency       : {camera_id: {neighbour_camera_id, ...}}
+    role_map        : {camera_id: role}  — used to set transition probs by role pair
+    transit_overrides: explicit (prob, expected_sec, tolerance_sec) per pair
+    """
+    global CAMERA_TRANSITIONS, CAMERA_HOP_DISTANCE
+
+    # Role-based default transition probabilities
+    _ROLE_PAIR_PROBS = {
+        ("entry",   "floor"):   (0.85, 3.0, 4.0),
+        ("floor",   "entry"):   (0.70, 3.0, 4.0),
+        ("floor",   "floor"):   (0.80, 4.0, 5.0),
+        ("floor",   "billing"): (0.65, 4.0, 5.0),
+        ("billing", "floor"):   (0.65, 4.0, 5.0),
+        ("floor",   "godown"):  (0.30, 6.0, 8.0),
+        ("godown",  "floor"):   (0.30, 6.0, 8.0),
+        ("entry",   "billing"): (0.15, 10.0, 12.0),
+        ("billing", "entry"):   (0.15, 10.0, 12.0),
+    }
+    _DEFAULT_PROB = (0.40, 5.0, 6.0)  # fallback for unknown role pairs
+
+    rmap = role_map or {}
+    transitions: Dict[Tuple[str, str], Tuple[float, float, float]] = {}
+
+    for cam, neighbours in adjacency.items():
+        for nb in neighbours:
+            for pair in [(cam, nb), (nb, cam)]:
+                if pair in transitions:
+                    continue
+                r_from = rmap.get(pair[0], "floor")
+                r_to   = rmap.get(pair[1], "floor")
+                transitions[pair] = _ROLE_PAIR_PROBS.get(
+                    (r_from, r_to), _DEFAULT_PROB
+                )
+
+    if transit_overrides:
+        transitions.update(transit_overrides)
+
+    # BFS-based hop distances
+    all_cams = set(adjacency.keys()) | {nb for nbrs in adjacency.values() for nb in nbrs}
+    hops: Dict[Tuple[str, str], int] = {}
+    for start in all_cams:
+        visited = {start: 0}
+        queue = [start]
+        while queue:
+            cur = queue.pop(0)
+            for nb in adjacency.get(cur, set()):
+                if nb not in visited:
+                    visited[nb] = visited[cur] + 1
+                    queue.append(nb)
+        for end, dist in visited.items():
+            if end != start:
+                hops[(start, end)] = dist
+
+    CAMERA_TRANSITIONS = transitions
+    CAMERA_HOP_DISTANCE = hops
+    logger.info(
+        "store_graph: topology loaded — %d transition pairs, %d hop distances",
+        len(CAMERA_TRANSITIONS),
+        len(CAMERA_HOP_DISTANCE),
+    )
 
 
 class StoreGraph:

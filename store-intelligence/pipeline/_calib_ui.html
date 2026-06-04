@@ -66,7 +66,7 @@ body{background:#0a0e1a;color:#c9d1d9;font-family:'Inter',system-ui,sans-serif;d
 </head>
 <body>
 <div id="topbar">
-  <h1>⬡ Zone Calibration Studio</h1>
+  <h1>⬡ Zone Calibration Studio <span id="store-title" style="margin-left:15px;font-size:0.95rem;font-weight:normal;color:#8b949e;background:#21262d;padding:4px 10px;border-radius:6px;border:1px solid #30363d"></span></h1>
   <button class="tbtn active" id="btn-mode-select" onclick="setMode('select')">↖ Select</button>
   <button class="tbtn" id="btn-mode-draw" onclick="setMode('draw')">✏ Draw</button>
   <button class="tbtn" id="btn-mode-line" onclick="setMode('line')">╱ Entry Line</button>
@@ -111,12 +111,12 @@ body{background:#0a0e1a;color:#c9d1d9;font-family:'Inter',system-ui,sans-serif;d
         <span class="prop-label">Role</span>
         <select class="prop-select" id="prop-role" onchange="updateProp('role',this.value)">
           <option value="zone">zone</option>
-          <option value="entry_line">entry_line (CAM3)</option>
-          <option value="inside_region">inside_region (CAM3)</option>
-          <option value="outside_region">outside_region (CAM3)</option>
-          <option value="billing_counter">billing_counter (CAM5)</option>
-          <option value="queue_area">queue_area (CAM5)</option>
-          <option value="staff_area">staff_area (CAM4)</option>
+          <option value="entry_line">entry_line</option>
+          <option value="inside_region">inside_region</option>
+          <option value="outside_region">outside_region</option>
+          <option value="billing_counter">billing_counter</option>
+          <option value="queue_area">queue_area</option>
+          <option value="staff_area">staff_area</option>
         </select>
       </div>
       <div class="prop-row">
@@ -130,7 +130,7 @@ body{background:#0a0e1a;color:#c9d1d9;font-family:'Inter',system-ui,sans-serif;d
         </div>
       </div>
       <div id="cam3-panel" style="display:none;background:#1a1f2e;border:1px solid #30363d;border-radius:8px;padding:10px">
-        <div style="font-size:.7rem;color:#e3b341;margin-bottom:6px;font-weight:600">⚡ CAM3 Entry Line Config</div>
+        <div style="font-size:.7rem;color:#e3b341;margin-bottom:6px;font-weight:600">⚡ Entry Line Config</div>
         <span class="prop-label">Inside direction</span>
         <select class="prop-select" id="prop-inside-is" onchange="updateEntryMeta('inside_is',this.value)">
           <option value="below">below (higher y = inside)</option>
@@ -153,6 +153,7 @@ let selectedIdx = -1;
 let mode = 'select';      // 'select' | 'draw' | 'line'
 let drawPts = [];          // in-progress polygon points (normalized)
 let frames  = {};          // camera_id → base64
+let imgWidth = 960, imgHeight = 540;
 
 // Canvas transform
 let scale = 1, offX = 0, offY = 0;
@@ -308,6 +309,20 @@ function updateProp(key,val){
   if(!s) return;
   pushHistory();
   s[key]=val;
+  
+  if(key==='role'){
+    if(val==='entry_line'){
+      s.shape_type='line';
+      if(s.points && s.points.length>2){
+        s.points=s.points.slice(0,2);
+      }
+      if(!s.meta) s.meta={inside_is:'below'};
+    } else {
+      s.shape_type='polygon';
+    }
+    fillProps();
+  }
+  
   renderZoneList(); render(); validate();
 }
 
@@ -316,6 +331,7 @@ function updateEntryMeta(key,val){
   if(!s) return;
   if(!s.meta) s.meta={};
   s.meta[key]=val;
+  render();
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
@@ -326,8 +342,8 @@ function showTab(t){
 }
 
 // ── Canvas helpers ─────────────────────────────────────────────────────────
-function toCanvas(nx,ny){ return {x:nx*cv.width*scale+offX, y:ny*cv.height*scale+offY}; }
-function toNorm(cx,cy){ return {x:(cx-offX)/(cv.width*scale), y:(cy-offY)/(cv.height*scale)}; }
+function toCanvas(nx,ny){ return {x:nx*imgWidth*scale+offX, y:ny*imgHeight*scale+offY}; }
+function toNorm(cx,cy){ return {x:(cx-offX)/(imgWidth*scale), y:(cy-offY)/(imgHeight*scale)}; }
 function wrapXY(e){
   const r=wrap.getBoundingClientRect();
   return {x:e.clientX-r.left, y:e.clientY-r.top};
@@ -336,11 +352,12 @@ function wrapXY(e){
 function fitView(){
   if(!currentCam||!frames[currentCam]) return;
   const img=new Image(); img.onload=()=>{
-    cv.width=img.naturalWidth; cv.height=img.naturalHeight;
-    const ws=wrap.clientWidth/cv.width, hs=wrap.clientHeight/cv.height;
+    imgWidth=img.naturalWidth; imgHeight=img.naturalHeight;
+    cv.width=wrap.clientWidth; cv.height=wrap.clientHeight;
+    const ws=wrap.clientWidth/imgWidth, hs=wrap.clientHeight/imgHeight;
     scale=Math.min(ws,hs)*.97;
-    offX=(wrap.clientWidth-cv.width*scale)/2;
-    offY=(wrap.clientHeight-cv.height*scale)/2;
+    offX=(wrap.clientWidth-imgWidth*scale)/2;
+    offY=(wrap.clientHeight-imgHeight*scale)/2;
     render();
   }; img.src='data:image/jpeg;base64,'+frames[currentCam];
 }
@@ -351,11 +368,11 @@ function render(){
   const img=new Image(); img.onload=()=>{
     ctx.clearRect(0,0,cv.width,cv.height);
     ctx.save(); ctx.setTransform(scale,0,0,scale,offX,offY);
-    ctx.drawImage(img,0,0,cv.width,cv.height);
+    ctx.drawImage(img,0,0,imgWidth,imgHeight);
     // draw committed shapes
     currentShapes().forEach((s,i)=>{
       if(!s.points||s.points.length<2) return;
-      const pts=s.points.map(p=>({x:p[0]*cv.width,y:p[1]*cv.height}));
+      const pts=s.points.map(p=>({x:p[0]*imgWidth,y:p[1]*imgHeight}));
       const col=s.color||'#888';
       const sel=i===selectedIdx;
       ctx.save();
@@ -400,7 +417,7 @@ function render(){
     });
     // in-progress draw
     if(drawPts.length>0){
-      const pts=drawPts.map(p=>({x:p[0]*cv.width,y:p[1]*cv.height}));
+      const pts=drawPts.map(p=>({x:p[0]*imgWidth,y:p[1]*imgHeight}));
       ctx.save();
       ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
       ctx.beginPath(); pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
@@ -459,8 +476,8 @@ wrap.addEventListener('mousemove',e=>{
     // Will be handled in click for deselect
   }
   if(dragging&&dragShapeIdx>=0){
-    const dx=(x-dragStart.x)/(cv.width*scale);
-    const dy=(y-dragStart.y)/(cv.height*scale);
+    const dx=(x-dragStart.x)/(imgWidth*scale);
+    const dy=(y-dragStart.y)/(imgHeight*scale);
     const s=currentShapes()[dragShapeIdx];
     if(s){ s.points=dragOrigPts.map(p=>[clamp01(p[0]+dx),clamp01(p[1]+dy)]); render(); }
   }
@@ -625,6 +642,7 @@ function updateToolbar(){
 
 // ── Init ──────────────────────────────────────────────────────────────────
 pushHistory();
+if(calib && calib.store_id){ document.getElementById('store-title').textContent = calib.store_id; }
 if(CAMERAS.length) selectCam(CAMERAS[0]);
 window.addEventListener('resize',fitView);
 </script>

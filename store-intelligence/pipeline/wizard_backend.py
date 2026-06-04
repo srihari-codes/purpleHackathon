@@ -2,11 +2,8 @@
 wizard_backend.py — Session management + API endpoints for the onboarding wizard.
 Imported by gui_server.py create_app() to register all wizard routes.
 
-Camera role → internal camera_id mapping:
-  entry   → CAM_ENTRY_03
-  billing → CAM_BILLING_05
-  floor   → CAM_FLOOR_01, CAM_FLOOR_02, ...
-  godown  → CAM_GODOWN_04, CAM_GODOWN_05, ...
+Camera roles: entry | billing | floor | godown
+Camera IDs are assigned dynamically by the wizard (e.g. CAM_ENTRY_01, CAM_FLOOR_02).
 """
 
 import base64
@@ -23,7 +20,7 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-SESSION_DIR = Path("/tmp/si_session")
+SESSION_DIR = Path("/data/si_session")
 
 ROLE_CAM_PREFIXES = {
     "entry":   "CAM_ENTRY",
@@ -58,6 +55,8 @@ class WizardSession:
     store_code: str = ""
     analysis_date: str = ""
     cameras: List[CameraSlot] = field(default_factory=list)
+    # adjacency_map: {camera_id: [neighbour_camera_id, ...]}
+    adjacency_map: Dict[str, List[str]] = field(default_factory=dict)
     pipeline_running: bool = False
     pipeline_done: bool = False
     pipeline_error: str = ""
@@ -66,6 +65,10 @@ class WizardSession:
 
     def camera_file_map(self) -> Dict[str, str]:
         return {c.camera_id: c.file_path for c in self.cameras if c.uploaded and c.file_path}
+
+    def camera_role_map(self) -> Dict[str, str]:
+        """Return {camera_id: role} for all slots."""
+        return {c.camera_id: c.role for c in self.cameras}
 
     def next_camera_id(self, role: str) -> str:
         prefix = ROLE_CAM_PREFIXES.get(role, "CAM_UNKNOWN")
@@ -86,10 +89,12 @@ class WizardSession:
                     "camera_id": c.camera_id,
                     "label": c.label,
                     "filename": c.filename,
+                    "file_path": c.file_path,
                     "uploaded": c.uploaded,
                 }
                 for c in self.cameras
             ],
+            "adjacency_map": self.adjacency_map,
             "pipeline_running": self.pipeline_running,
             "pipeline_done": self.pipeline_done,
             "pipeline_error": self.pipeline_error,
@@ -98,6 +103,15 @@ class WizardSession:
 
 
 SESSION = WizardSession()
+
+
+def save_session():
+    try:
+        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        with open(SESSION_DIR / "session.json", "w") as f:
+            json.dump(SESSION.to_dict(), f, indent=2)
+    except Exception as e:
+        logger.error("Failed to save session: %s", e)
 
 
 def register_wizard_routes(app, shared):
@@ -117,6 +131,7 @@ def register_wizard_routes(app, shared):
         SESSION.store_code  = body.get("store_code", "")
         SESSION.store_id    = body.get("store_id") or f"ST_{SESSION.store_code.upper()}"
         SESSION.analysis_date = body.get("analysis_date", "")
+        save_session()
         return {"ok": True, "store_id": SESSION.store_id}
 
     # ------------------------------------------------------------------
@@ -137,6 +152,7 @@ def register_wizard_routes(app, shared):
         )
         SESSION.cameras.append(slot)
         (SESSION_DIR / slot.slot_id).mkdir(parents=True, exist_ok=True)
+        save_session()
         return {"ok": True, "slot": slot.__dict__}
 
     @app.delete("/api/camera/{slot_id}")
@@ -145,6 +161,7 @@ def register_wizard_routes(app, shared):
         slot_dir = SESSION_DIR / slot_id
         if slot_dir.exists():
             shutil.rmtree(slot_dir, ignore_errors=True)
+        save_session()
         return {"ok": True}
 
     @app.post("/api/camera/{slot_id}/upload")
@@ -160,6 +177,7 @@ def register_wizard_routes(app, shared):
         slot.file_path = str(dest)
         slot.filename  = file.filename
         slot.uploaded  = True
+        save_session()
         return {"ok": True, "path": str(dest), "camera_id": slot.camera_id}
 
     @app.get("/api/camera/{slot_id}/frame")
@@ -194,6 +212,37 @@ def register_wizard_routes(app, shared):
                 "camera_id": slot.camera_id}
 
     # ------------------------------------------------------------------
+    # Step 3.5 — Camera Adjacency
+    # ------------------------------------------------------------------
+
+    @app.post("/api/adjacency")
+    async def api_adjacency(body: dict):
+        """
+        Save camera adjacency map provided by the user.
+        Body: {adjacency: {camera_id: [neighbour_ids]}}
+        """
+        adj = body.get("adjacency", {})
+        # Validate that all referenced camera IDs exist in the session
+        valid_cams = {c.camera_id for c in SESSION.cameras}
+        for cam, nbs in adj.items():
+            unknown = [c for c in ([cam] + list(nbs)) if c not in valid_cams]
+            if unknown:
+                raise HTTPException(400, f"Unknown camera IDs: {unknown}")
+        SESSION.adjacency_map = {k: list(v) for k, v in adj.items()}
+        save_session()
+        return {"ok": True, "adjacency": SESSION.adjacency_map}
+
+    @app.get("/api/adjacency")
+    async def api_adjacency_get():
+        return {
+            "adjacency": SESSION.adjacency_map,
+            "cameras": [
+                {"camera_id": c.camera_id, "role": c.role, "label": c.label}
+                for c in SESSION.cameras
+            ],
+        }
+
+    # ------------------------------------------------------------------
     # Step 4 — Start Analysis
     # ------------------------------------------------------------------
 
@@ -215,6 +264,9 @@ def register_wizard_routes(app, shared):
         if pipeline_dir not in sys.path:
             sys.path.insert(0, pipeline_dir)
 
+        # Set STORE_ID env var so zone_mapper picks it up
+        os.environ["STORE_ID"] = SESSION.store_id or "STORE_DEMO"
+
         def _run():
             try:
                 SESSION.pipeline_running = True
@@ -223,11 +275,12 @@ def register_wizard_routes(app, shared):
                 output_path = str(SESSION_DIR / "events.jsonl")
                 run_pipeline(
                     store_id        = SESSION.store_id or "STORE_DEMO",
-                    clips_dir       = str(SESSION_DIR),
                     output_path     = output_path,
+                    camera_file_map = SESSION.camera_file_map(),
+                    camera_role_map = SESSION.camera_role_map(),
+                    adjacency_map   = SESSION.adjacency_map or None,
                     gui_port        = 8080,
                     speed           = speed,
-                    camera_file_map = SESSION.camera_file_map(),
                 )
                 SESSION.pipeline_done = True
             except Exception as e:

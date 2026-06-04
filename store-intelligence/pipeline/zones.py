@@ -243,8 +243,43 @@ def get_zones_for_camera(camera_id: str) -> List[Zone]:
                     tuple(z.get("color_bgr", [0, 255, 128]))
                 ))
             return zones
-    # 3. Hardcoded fallback
-    return CAMERA_ZONES.get(camera_id, [])
+    # 3. Hardcoded fallback (STORE_BLR_002 specific layout — may not match this store)
+    fallback = CAMERA_ZONES.get(camera_id)
+    if not fallback:
+        # Fall back to role-matched template for dynamically named cameras
+        cam_upper = camera_id.upper()
+        if "ENTRY" in cam_upper:
+            fallback = CAMERA_ZONES.get("CAM_ENTRY_03")
+        elif "BILLING" in cam_upper:
+            fallback = CAMERA_ZONES.get("CAM_BILLING_05")
+        elif "GODOWN" in cam_upper or "STAFF" in cam_upper:
+            fallback = CAMERA_ZONES.get("CAM_GODOWN_04")
+        elif "FLOOR" in cam_upper:
+            if "_02" in cam_upper:
+                fallback = CAMERA_ZONES.get("CAM_FLOOR_02")
+            else:
+                fallback = CAMERA_ZONES.get("CAM_FLOOR_01")
+
+    if fallback:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "zones: using hardcoded fallback zones for %s. "
+            "These may be wrong for this store. Run calibration to define correct zones.",
+            camera_id,
+        )
+        # Re-bind the fallback zones to the actual camera_id
+        bound_fallback = []
+        for zone in fallback:
+            bound_fallback.append(Zone(
+                zone_id=zone.zone_id,
+                sku_zone=zone.sku_zone,
+                camera_id=camera_id,
+                polygon_norm=zone.polygon_norm,
+                color_bgr=zone.color_bgr
+            ))
+        return bound_fallback
+    return []
+
 
 
 def get_all_zones() -> Dict[str, List[Zone]]:
@@ -288,8 +323,14 @@ def get_entry_line_for_camera(camera_id: str) -> dict:
         except Exception:
             pass
             
-    # Default to ENTRY_LINE_NORM config
-    cfg = ENTRY_LINE_NORM.get(camera_id, {})
+    # Default to ENTRY_LINE_NORM config or fallback based on camera name substring
+    cfg = ENTRY_LINE_NORM.get(camera_id)
+    if not cfg:
+        if "ENTRY" in camera_id.upper():
+            cfg = ENTRY_LINE_NORM.get("CAM_ENTRY_03", {})
+        else:
+            cfg = {}
+            
     return {
         "p1": [cfg.get("line_x_start", 0.10), cfg.get("line_y", 0.50)],
         "p2": [cfg.get("line_x_end", 0.90), cfg.get("line_y", 0.50)],

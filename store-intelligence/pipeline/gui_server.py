@@ -97,14 +97,16 @@ class SharedState:
     async def _broadcast_frame(self, camera_id: str, jpeg_bytes: bytes, ts: str = ""):
         b64 = base64.b64encode(jpeg_bytes).decode()
         msg = json.dumps({"camera_id": camera_id, "frame": b64, "timestamp": ts})
-        dead = set()
-        for q in list(self._frame_queues.values()):
+        dead_keys = []
+        for key, q in list(self._frame_queues.items()):
             try:
                 q.put_nowait(msg)
             except asyncio.QueueFull:
                 pass
             except Exception:
-                dead.add(q)
+                dead_keys.append(key)
+        for k in dead_keys:
+            self._frame_queues.pop(k, None)
 
     async def _broadcast_event(self, event_dict: dict):
         msg = json.dumps(event_dict)
@@ -221,24 +223,23 @@ h1  { padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
   </div>
 </div>
 <script>
-const CAMERAS = ["CAM_ENTRY_03","CAM_FLOOR_01","CAM_FLOOR_02","CAM_BILLING_05","CAM_GODOWN_04"];
 const camImgs = {};
-
-// Build camera panels
 const camsDiv = document.getElementById("cams");
-CAMERAS.forEach(cid => {
-  const panel = document.createElement("div");
-  panel.className = "cam-panel";
-  panel.innerHTML = `<div class="cam-label">${cid} <span id="ts-${cid}" style="float:right; color:#58a6ff; font-weight:bold;"></span></div><img id="img-${cid}" src="" alt="${cid}">`;
-  camsDiv.appendChild(panel);
-  camImgs[cid] = document.getElementById("img-"+cid);
-});
 
 // Frame WebSocket
 const wsf = new WebSocket(`ws://${location.host}/ws/frames`);
 wsf.onmessage = e => {
   const d = JSON.parse(e.data);
-  const img = camImgs[d.camera_id];
+  let img = camImgs[d.camera_id];
+  if (!img) {
+      // Dynamically create camera panel on first frame arrival
+      const panel = document.createElement("div");
+      panel.className = "cam-panel";
+      panel.innerHTML = `<div class="cam-label">${d.camera_id} <span id="ts-${d.camera_id}" style="float:right; color:#58a6ff; font-weight:bold;"></span></div><img id="img-${d.camera_id}" src="" alt="${d.camera_id}">`;
+      camsDiv.appendChild(panel);
+      camImgs[d.camera_id] = document.getElementById("img-"+d.camera_id);
+      img = camImgs[d.camera_id];
+  }
   if (img) {
       img.src = "data:image/jpeg;base64," + d.frame;
       if (d.timestamp) {
@@ -399,16 +400,30 @@ def create_app(shared: SharedState):
     @app.websocket("/ws/frames")
     async def ws_frames(ws: WebSocket):
         await ws.accept()
-        q: asyncio.Queue = asyncio.Queue(maxsize=10)
-        # Register this client's queue
-        # We use a dummy camera_id key per client
+        q: asyncio.Queue = asyncio.Queue(maxsize=30)
         client_key = id(ws)
         shared._frame_queues[client_key] = q
+        # Send a handshake so the browser knows the socket is live
+        try:
+            await ws.send_text(json.dumps({"_type": "connected"}))
+        except Exception:
+            shared._frame_queues.pop(client_key, None)
+            return
         try:
             while True:
-                msg = await asyncio.wait_for(q.get(), timeout=30.0)
-                await ws.send_text(msg)
-        except (WebSocketDisconnect, asyncio.TimeoutError):
+                try:
+                    # Short timeout so we can send keepalive pings
+                    msg = await asyncio.wait_for(q.get(), timeout=20.0)
+                    await ws.send_text(msg)
+                except asyncio.TimeoutError:
+                    # Send a keepalive ping to prevent proxy/browser timeout
+                    try:
+                        await ws.send_text(json.dumps({"_type": "ping"}))
+                    except Exception:
+                        break  # client gone
+        except WebSocketDisconnect:
+            pass
+        except Exception:
             pass
         finally:
             shared._frame_queues.pop(client_key, None)
@@ -451,6 +466,9 @@ def create_app(shared: SharedState):
 
 def run_server(host: str = "0.0.0.0", port: int = 8080, shared: SharedState = SHARED):
     """Run the GUI server in a background thread."""
+    if getattr(shared, "gui_started", False):
+        logger.info("GUI server already running on port %d", port)
+        return None
     import uvicorn
     app = create_app(shared)
     config = uvicorn.Config(app, host=host, port=port,
@@ -458,5 +476,6 @@ def run_server(host: str = "0.0.0.0", port: int = 8080, shared: SharedState = SH
     server = uvicorn.Server(config)
     t = threading.Thread(target=server.run, daemon=True)
     t.start()
+    shared.gui_started = True
     logger.info(f"GUI dashboard: http://{host}:{port}")
     return t

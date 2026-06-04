@@ -22,14 +22,16 @@
 
 # ── Shared base config ────────────────────────────────────────────────────────
 x-pipeline-env: &pipeline-env
-  STORE_ID: ${STORE_ID:-STORE_BLR_002}
-  CLIPS_DIR: /data/clips
-  OUTPUT: /data/events.jsonl
+  STORE_ID: ${STORE_ID:?STORE_ID must be set (e.g. STORE_ID=MY_STORE docker compose up)}
+  CLIPS_DIR: ${CLIPS_DIR:-/data/clips}
+  OUTPUT: ${OUTPUT:-/data/events.jsonl}
+  CAMERA_MAP: ${CAMERA_MAP:-{}}
+  CAMERA_ROLES: ${CAMERA_ROLES:-{}}
+  CAMERA_ADJACENCY: ${CAMERA_ADJACENCY:-{}}
   GUI_PORT: ${GUI_PORT:-8080}
-  SPEED: ${SPEED:-0}              # 0 = max speed; 1.0 = real-time
+  SPEED: ${SPEED:-0} # 0 = max speed; 1.0 = real-time
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   PYTHONUNBUFFERED: "1"
-  CAM3_START_ISO: ${CAM3_START_ISO:-}
   # Billing queue abandon window (seconds).
   # 45s for 2-min test clips; set to 300 for 20-min production clips.
   POS_ABANDON_WINDOW_SEC: ${POS_ABANDON_WINDOW_SEC:-45}
@@ -68,12 +70,12 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
 
   # ── CPU-only pipeline (no NVIDIA driver required) ─────────────────────────
   # Run with:  docker compose --profile cpu up pipeline-cpu
   pipeline-cpu:
-    profiles: [cpu]
+    profiles: [ cpu ]
     build:
       context: .
       dockerfile: pipeline/Dockerfile
@@ -103,7 +105,7 @@ services:
     ports:
       - "8081:8081"
     restart: "no"
-    entrypoint: ["python3", "/app/pipeline/calibrate_zones.py", "--clips_dir", "/data/clips", "--port", "8081"]
+    entrypoint: [ "python3", "/app/pipeline/calibrate_zones.py", "--clips_dir", "/data/clips", "--port", "8081" ]
 
   # ── Store Intelligence API ────────────────────────────────────────────────
   api:
@@ -122,7 +124,7 @@ services:
       - "${API_PORT:-8000}:8000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-sf", "http://localhost:8000/health" ]
       interval: 10s
       timeout: 5s
       retries: 5

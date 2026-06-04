@@ -55,16 +55,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("detect")
 
-# ---------------------------------------------------------------------------
-# Camera ID mapping
-# ---------------------------------------------------------------------------
-CAMERA_MAP = {
-    "1": "CAM_FLOOR_01",
-    "2": "CAM_FLOOR_02",
-    "3": "CAM_ENTRY_03",
-    "4": "CAM_GODOWN_04",
-    "5": "CAM_BILLING_05",
-}
+# Camera ID convention note:
+#   Camera IDs are now fully dynamic and assigned by the wizard onboarding flow.
+#   Roles (entry / billing / floor / godown) determine pipeline behaviour.
+#   The mapping from role → camera_id is passed in via camera_role_map.
 
 # ---------------------------------------------------------------------------
 # YOLO + ByteTrack wrapper
@@ -266,6 +260,7 @@ def annotate_frame(
     frame_h:      int,
     entry_detector: Optional[EntryExitDetector] = None,
     queue_depth:  int = 0,
+    is_billing:   bool = False,
 ) -> np.ndarray:
     annotated = frame_bgr.copy()
 
@@ -278,8 +273,8 @@ def annotate_frame(
         cv2.putText(annotated, zone.sku_zone, (cx-20, cy),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, zone.color_bgr, 1)
 
-    # Draw entry line
-    if entry_detector and camera_id == "CAM_ENTRY_03":
+    # Draw entry line (any camera with the entry role)
+    if entry_detector and entry_detector.camera_id == camera_id:
         x1, y1, x2, y2 = entry_detector.get_line_pixels(frame_w, frame_h)
         cv2.line(annotated, (x1, y1), (x2, y2), (0, 255, 255), 2)
         cv2.putText(annotated, "ENTRY LINE", (x1+4, y1-6),
@@ -318,7 +313,7 @@ def annotate_frame(
         f"CAM: {camera_id}",
         f"ACTIVE: {identity_mgr.active_count}",
     ]
-    if camera_id == "CAM_BILLING_05":
+    if is_billing or camera_id == "CAM_BILLING_05":
         hud_text.append(f"QUEUE: {queue_depth}")
     for i, t in enumerate(hud_text):
         cv2.putText(annotated, t, (8, 20 + i*18),
@@ -344,8 +339,10 @@ class CameraProcessor:
         behavior_sm:    Optional["BehaviorStateMachine"] = None,
         memory_mgr=None,
         camera_rep=None,
+        camera_role:    str = "floor",
     ):
         self.camera_id     = camera_id
+        self.camera_role   = camera_role
         self.video_path    = video_path
         self.detector      = detector
         self.identity_mgr  = identity_mgr
@@ -362,18 +359,18 @@ class CameraProcessor:
         self._zones_refresh_counter = 0   # refresh zones every N frames
         self.dwell_tracker = ZoneDwellTracker()
 
-        # Camera-specific modules
+        # Camera-specific modules based on role
         self.entry_detector: Optional[EntryExitDetector] = None
         self.queue_tracker:  Optional[QueueTracker]      = None
-        if camera_id == "CAM_ENTRY_03":
-            cfg = get_entry_line_for_camera("CAM_ENTRY_03")
+        if camera_role == "entry":
+            cam_cfg = get_entry_line_for_camera(camera_id)
             self.entry_detector = EntryExitDetector(
                 camera_id=camera_id,
-                p1=cfg.get("p1"),
-                p2=cfg.get("p2"),
-                inside_is=cfg.get("inside_is", "below"),
+                p1=cam_cfg.get("p1"),
+                p2=cam_cfg.get("p2"),
+                inside_is=cam_cfg.get("inside_is", "below"),
             )
-        if camera_id == "CAM_BILLING_05":
+        if camera_role == "billing":
             self.queue_tracker = QueueTracker()
 
         # Track which visitors we've seen zone-enter for (per zone)
@@ -660,14 +657,16 @@ class CameraProcessor:
 
         self.frame_index += 1
 
-        # Annotate frame
-        # Optimization: Only draw and encode if a browser client is connected and rate-limit to every 5th frame
-        if SHARED._frame_queues and (self.frame_index % 5 == 0):
+        # Annotate and push frame every 3rd frame.
+        # Always encode (don't gate on _frame_queues) so late-connecting
+        # browsers get frames immediately the moment they open the WS.
+        if self.frame_index % 3 == 0:
             queue_depth = self.queue_tracker.current_queue_depth if self.queue_tracker else 0
             annotated = annotate_frame(
                 frame_bgr, self.camera_id, detections, self.identity_mgr,
                 self.staff_tracker, self.zones, w, h,
                 self.entry_detector, queue_depth,
+                is_billing=(self.camera_role == "billing"),
             )
         else:
             annotated = None
@@ -765,52 +764,27 @@ def ocr_timestamp_from_frame(frame_bgr: np.ndarray) -> Optional[datetime]:
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def find_video_file(clips_dir: str, cam_num: str) -> Optional[str]:
-    """Find video file for camera number in clips directory."""
-    clips = Path(clips_dir)
-    patterns = [
-        f"CAM {cam_num}.*",
-        f"cam{cam_num}.*",
-        f"CAM{cam_num}.*",
-        f"camera{cam_num}.*",
-        f"camera_{cam_num}.*",
-    ]
-    for pat in patterns:
-        matches = list(clips.glob(pat))
-        if matches:
-            return str(matches[0])
-    return None
-
-
 def infer_camera_start_time(
-    clips_dir: str, cam_nums: list, camera_file_map: Optional[Dict[str, str]] = None
+    camera_file_map: Dict[str, str],
 ) -> Dict[str, datetime]:
     """
     Try to OCR start timestamps from first frame of each camera.
-    For cameras where OCR fails (e.g. Cam3 blur), infer from others.
+    For cameras where OCR fails, infer from others.
     Assumes all cameras are synchronised.
     """
     from collections import Counter
     start_times = {}
-    fallback_dt = datetime(2026, 4, 10, 20, 10, 0, tzinfo=timezone.utc)
+    fallback_dt = datetime.now(timezone.utc)
 
-    # 1. OCR each camera and collect file modification dates
     max_valid_date = None
-    for cam_num in cam_nums:
-        camera_id = CAMERA_MAP.get(cam_num)
-        if camera_file_map and camera_id in camera_file_map:
-            path = camera_file_map[camera_id]
-        else:
-            path = find_video_file(clips_dir, cam_num)
-        if not path:
+    for camera_id, path in camera_file_map.items():
+        if not path or not os.path.exists(path):
             continue
-        
-        # Get video file modification date
-        if os.path.exists(path):
-            mtime = os.path.getmtime(path)
-            mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
-            if max_valid_date is None or mtime_dt > max_valid_date:
-                max_valid_date = mtime_dt
+
+        mtime = os.path.getmtime(path)
+        mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        if max_valid_date is None or mtime_dt > max_valid_date:
+            max_valid_date = mtime_dt
 
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
@@ -828,66 +802,81 @@ def infer_camera_start_time(
     if max_valid_date:
         logger.info(f"Max valid date based on file mtime: {max_valid_date.date().isoformat()}")
     else:
-        max_valid_date = datetime.now(timezone.utc)
+        max_valid_date = fallback_dt
 
-    # 2. Consensus Date Extraction (only using dates <= max_valid_date.date())
     valid_dates = []
     for camera_id, dt in start_times.items():
         if dt.date() <= max_valid_date.date():
             valid_dates.append(dt.date())
         else:
-            logger.warning(f"Discarding impossible future date from consensus for {camera_id}: {dt.date().isoformat()}")
-            
+            logger.warning(f"Discarding impossible future date for {camera_id}: {dt.date().isoformat()}")
+
     if valid_dates:
+        from collections import Counter
         consensus_date = Counter(valid_dates).most_common(1)[0][0]
     else:
         consensus_date = fallback_dt.date()
-        
+
     logger.info(f"Consensus Date: {consensus_date.isoformat()}")
-    
-    # 3. Apply consensus date & infer missing
-    final_start_times = {}
-    
-    # Find a good reference time for missing cameras
+
+    # Find reference time from any successful OCR
     reference_dt = None
-    for camera_id in ["CAM_FLOOR_02", "CAM_FLOOR_01", "CAM_BILLING_05", "CAM_GODOWN_04"]:
-        if camera_id in start_times:
-            t = start_times[camera_id].time()
-            reference_dt = datetime.combine(consensus_date, t, tzinfo=timezone.utc)
-            break
+    for camera_id, dt in start_times.items():
+        t = dt.time()
+        reference_dt = datetime.combine(consensus_date, t, tzinfo=timezone.utc)
+        break
     if not reference_dt:
-        if start_times:
-            reference_dt = datetime.combine(consensus_date, list(start_times.values())[0].time(), tzinfo=timezone.utc)
-        else:
-            reference_dt = fallback_dt
-            
-    for cam_num in cam_nums:
-        camera_id = CAMERA_MAP.get(cam_num)
-        if not camera_id:
-            continue
+        reference_dt = fallback_dt
+
+    final_start_times: Dict[str, datetime] = {}
+    for camera_id in camera_file_map:
         if camera_id in start_times:
             t = start_times[camera_id].time()
-            corrected_dt = datetime.combine(consensus_date, t, tzinfo=timezone.utc)
-            final_start_times[camera_id] = corrected_dt
-            logger.info(f"Final start time for {camera_id}: {corrected_dt.isoformat()}")
+            corrected = datetime.combine(consensus_date, t, tzinfo=timezone.utc)
+            final_start_times[camera_id] = corrected
         else:
             final_start_times[camera_id] = reference_dt
-            logger.info(f"Inferred (missing) start time for {camera_id}: {reference_dt.isoformat()}")
-            
+
     return final_start_times
 
 
+
 def run_pipeline(
-    store_id:    str,
-    clips_dir:   str,
-    output_path: str,
-    gui_port:    int  = 8080,
-    speed:       float = 1.0,
-    cam3_start:  Optional[str] = None,
-    camera_file_map: Optional[Dict[str, str]] = None,
+    store_id:        str,
+    output_path:     str,
+    camera_file_map: Dict[str, str],
+    camera_role_map: Optional[Dict[str, str]] = None,
+    adjacency_map:   Optional[Dict[str, List[str]]] = None,
+    gui_port:        int   = 8080,
+    speed:           float = 1.0,
+    clips_dir:       str   = "",   # retained for legacy CLI compat only
 ):
+    """
+    Start the detection pipeline.
+
+    camera_file_map : {camera_id: /path/to/video.mp4}  — required
+    camera_role_map : {camera_id: role}  e.g. {"CAM_ENTRY_01": "entry"}
+    adjacency_map   : {camera_id: [neighbour_camera_id, ...]}  (wizard step 3.5)
+    """
+    if not camera_file_map:
+        logger.error("run_pipeline: camera_file_map is empty — nothing to process")
+        return
     logger.info(f"Starting detection pipeline for {store_id}")
-    logger.info(f"Clips dir: {clips_dir}  Output: {output_path}  Speed: {speed}x")
+    logger.info(f"Cameras: {list(camera_file_map.keys())}  Output: {output_path}  Speed: {speed}x")
+
+    # --- Wire dynamic topology into tracker + store_graph ---
+    role_map = camera_role_map or {}
+    adj: Dict[str, set] = {cam: set(nbs) for cam, nbs in (adjacency_map or {}).items()}
+    try:
+        from tracker import set_adjacency_map
+        set_adjacency_map(adj)
+    except Exception as e:
+        logger.warning(f"Could not set adjacency map: {e}")
+    try:
+        from store_graph import set_camera_topology
+        set_camera_topology(adj, role_map=role_map)
+    except Exception as e:
+        logger.warning(f"Could not set camera topology: {e}")
 
     # --- Start GUI server ---
     run_server(port=gui_port, shared=SHARED)
@@ -901,6 +890,9 @@ def run_pipeline(
     behavior_sm   = BehaviorStateMachine()   # shared across all cameras
     memory_mgr    = VisitorMemoryManager()
     camera_rep    = CameraReputation()
+    # Seed camera reputation from wizard roles
+    if role_map:
+        camera_rep.seed_from_role_map(role_map)
     auditor       = SystemAuditor(str(Path(output_path).parent))
     auditor.set_broadcast(lambda w: SHARED.push_warning(w) if hasattr(SHARED, 'push_warning') else None)
     SHARED.identity_mgr = identity_mgr
@@ -937,33 +929,20 @@ def run_pipeline(
         return result
     emitter.emit = _emit_and_share
 
-    # --- Discover camera files ---
-    cam_nums  = list(CAMERA_MAP.keys())
-    start_times = infer_camera_start_time(clips_dir, cam_nums, camera_file_map)
-
-    # Override Cam3 start time if provided
-    if cam3_start:
-        try:
-            dt = datetime.fromisoformat(cam3_start.replace("Z", "+00:00"))
-            start_times["CAM_ENTRY_03"] = dt
-            logger.info(f"Cam3 start time overridden: {dt.isoformat()}")
-        except Exception as e:
-            logger.warning(f"Could not parse cam3_start_iso: {e}")
+    # --- Infer per-camera start timestamps ---
+    start_times = infer_camera_start_time(
+        camera_file_map=camera_file_map
+    )
 
     # --- Build per-camera processors ---
     processors: Dict[str, CameraProcessor] = {}
-    caps: Dict[str, cv2.VideoCapture] = {}
 
-    for cam_num, camera_id in CAMERA_MAP.items():
-        if camera_file_map and camera_id in camera_file_map:
-            path = camera_file_map[camera_id]
-        else:
-            path = find_video_file(clips_dir, cam_num)
-        if not path:
-            logger.warning(f"No video file found for {camera_id} (cam {cam_num})")
+    for camera_id, path in camera_file_map.items():
+        if not path or not os.path.exists(path):
+            logger.warning(f"Video file not found for {camera_id}: {path}")
             continue
-        start_dt = start_times.get(camera_id,
-                                   datetime(2026, 3, 3, 9, 0, 0, tzinfo=timezone.utc))
+        start_dt = start_times.get(camera_id, datetime.now(timezone.utc))
+        role = role_map.get(camera_id, "floor")
         proc = CameraProcessor(
             camera_id=camera_id,
             video_path=path,
@@ -975,6 +954,7 @@ def run_pipeline(
             behavior_sm=behavior_sm,
             memory_mgr=memory_mgr,
             camera_rep=camera_rep,
+            camera_role=role,
         )
         if proc.open():
             processors[camera_id] = proc
@@ -1117,34 +1097,84 @@ def run_pipeline(
 # ---------------------------------------------------------------------------
 
 def main():
+    import json as _json
     parser = argparse.ArgumentParser(
-        description="Store Intelligence Detection Pipeline"
+        description="Store Intelligence Detection Pipeline\n\n"
+                    "Requires --camera_map (JSON dict mapping camera_id to video path).\n"
+                    "Example:\n"
+                    "  python detect.py \\\n"
+                    "    --store_id MY_STORE \\\n"
+                    "    --camera_map '{\"CAM_ENTRY_01\":\"/data/entry.mp4\",\"CAM_FLOOR_02\":\"/data/floor.mp4\"}' \\\n"
+                    "    --output /data/events.jsonl"
     )
-    parser.add_argument("--store_id",   default="STORE_BLR_002",
-                        help="Store ID (e.g. STORE_BLR_002)")
-    parser.add_argument("--clips_dir",  default="/data/clips",
-                        help="Directory containing CAM 1.mp4 … CAM 5.mp4")
-    parser.add_argument("--output",     default="/data/events.jsonl",
-                        help="Path for output events JSONL file")
-    parser.add_argument("--gui_port",   type=int, default=8080,
-                        help="Port for web GUI dashboard")
-    parser.add_argument("--speed",      type=float, default=1.0,
-                        help="Playback speed multiplier (1.0 = real-time, 0 = max speed)")
-    parser.add_argument("--cam3_start_iso", default=None,
-                        help="Override Cam3 start timestamp (ISO-8601 UTC)")
-    parser.add_argument("--log_level",  default="INFO",
-                        help="Logging level")
+    parser.add_argument("--store_id",
+                        default=os.environ.get("STORE_ID", ""),
+                        help="Store ID. Falls back to STORE_ID env var.")
+    parser.add_argument("--camera_map",
+                        default=os.environ.get("CAMERA_MAP", "{}"),
+                        help="JSON dict: {camera_id: video_path}. Also settable via CAMERA_MAP env var.")
+    parser.add_argument("--camera_roles",
+                        default=os.environ.get("CAMERA_ROLES", "{}"),
+                        help="JSON dict: {camera_id: role}. Also settable via CAMERA_ROLES env var.")
+    parser.add_argument("--adjacency",
+                        default=os.environ.get("CAMERA_ADJACENCY", "{}"),
+                        help="JSON dict: {camera_id: [neighbour_ids]}. Also settable via CAMERA_ADJACENCY env var.")
+    parser.add_argument("--output",
+                        default=os.environ.get("OUTPUT", "/data/events.jsonl"),
+                        help="Path for output events JSONL file.")
+    parser.add_argument("--gui_port",   type=int, default=int(os.environ.get("GUI_PORT", "8080")),
+                        help="Port for web GUI dashboard.")
+    parser.add_argument("--speed",      type=float, default=float(os.environ.get("SPEED", "1.0")),
+                        help="Playback speed multiplier (1.0 = real-time, 0 = max speed).")
+    parser.add_argument("--log_level",  default=os.environ.get("LOG_LEVEL", "INFO"),
+                        help="Logging level.")
+    parser.add_argument("--clips_dir",  default=os.environ.get("CLIPS_DIR", "/data/clips"),
+                        help="Directory containing video clips.")
+    parser.add_argument("--cam3_start_iso", default=os.environ.get("CAM3_START_ISO", ""),
+                        help="ISO-8601 UTC override for entry cam start time.")
 
     args = parser.parse_args()
     logging.getLogger().setLevel(getattr(logging, args.log_level.upper(), logging.INFO))
 
+    if not args.store_id:
+        parser.error("--store_id is required (or set STORE_ID env var)")
+
+    try:
+        camera_file_map = _json.loads(args.camera_map) if args.camera_map else {}
+    except Exception as e:
+        parser.error(f"--camera_map is not valid JSON: {e}")
+
+    try:
+        camera_role_map = _json.loads(args.camera_roles) if args.camera_roles and args.camera_roles != "{}" else None
+    except Exception:
+        camera_role_map = None
+
+    try:
+        adjacency_map = _json.loads(args.adjacency) if args.adjacency and args.adjacency != "{}" else None
+    except Exception:
+        adjacency_map = None
+
+    if not camera_file_map:
+        logger.info("No camera map provided. Starting GUI server in Wizard mode on port %d...", args.gui_port)
+        from gui_server import run_server, SHARED
+        run_server(port=args.gui_port, shared=SHARED)
+        # Keep main thread alive while wizard runs
+        import time
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Stopping Wizard server...")
+        return
+
     run_pipeline(
         store_id=args.store_id,
-        clips_dir=args.clips_dir,
         output_path=args.output,
+        camera_file_map=camera_file_map,
+        camera_role_map=camera_role_map,
+        adjacency_map=adjacency_map,
         gui_port=args.gui_port,
         speed=args.speed,
-        cam3_start=args.cam3_start_iso,
     )
 
 

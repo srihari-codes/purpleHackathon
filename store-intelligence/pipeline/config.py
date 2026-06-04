@@ -190,13 +190,17 @@ class _Config:
     COURTROOM_VETO_THRESHOLD:    float = 0.70    # prosecutor score above this = veto
 
     # ── Camera Reputation ─────────────────────────────────────────────────────
-    CAMERA_REPUTATION_PRIORS: dict = {
-        "CAM_FLOOR_01":   {"occlusion_risk": 0.40, "reliability": 0.80, "spec": "floor"},
-        "CAM_FLOOR_02":   {"occlusion_risk": 0.40, "reliability": 0.80, "spec": "floor"},
-        "CAM_ENTRY_03":   {"occlusion_risk": 0.15, "reliability": 0.95, "spec": "entry"},
-        "CAM_GODOWN_04":  {"occlusion_risk": 0.60, "reliability": 0.65, "spec": "staff"},
-        "CAM_BILLING_05": {"occlusion_risk": 0.20, "reliability": 0.90, "spec": "billing"},
+    # Priors keyed by ROLE (not camera ID) so the wizard can seed dynamically.
+    # Roles: "entry", "billing", "floor", "godown"
+    CAMERA_REPUTATION_PRIORS_BY_ROLE: dict = {
+        "floor":   {"occlusion_risk": 0.40, "reliability": 0.80, "spec": "floor"},
+        "entry":   {"occlusion_risk": 0.15, "reliability": 0.95, "spec": "entry"},
+        "godown":  {"occlusion_risk": 0.60, "reliability": 0.65, "spec": "staff"},
+        "billing": {"occlusion_risk": 0.20, "reliability": 0.90, "spec": "billing"},
     }
+    # Per-camera priors (populated at runtime by wizard/pipeline — starts empty).
+    # Format: {camera_id: {"occlusion_risk": float, "reliability": float, "spec": str}}
+    CAMERA_REPUTATION_PRIORS: dict = {}
     CAMERA_REP_LEARNING_RATE:    float = 0.01
     CAMERA_REP_MIN_MODIFIER:     float = 0.70
 

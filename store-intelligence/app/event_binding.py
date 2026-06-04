@@ -59,8 +59,8 @@ class EventBinding:
     Hot-reload aware — delegates to ZoneMapper which checks mtime on each call.
     """
 
-    def __init__(self, store_id: str = "STORE_BLR_002") -> None:
-        self._store_id = store_id
+    def __init__(self, store_id: Optional[str] = None) -> None:
+        self._store_id = store_id or os.environ.get("STORE_ID", "")
         self._mapper = None
         self._init_mapper()
 
@@ -204,8 +204,10 @@ class EventBinding:
 _binding: Optional[EventBinding] = None
 
 
-def get_event_binding(store_id: str = "STORE_BLR_002") -> EventBinding:
+def get_event_binding(store_id: Optional[str] = None) -> EventBinding:
+    """Return the module-level EventBinding singleton."""
     global _binding
     if _binding is None:
-        _binding = EventBinding(store_id)
+        resolved = store_id or os.environ.get("STORE_ID", "")
+        _binding = EventBinding(resolved)
     return _binding

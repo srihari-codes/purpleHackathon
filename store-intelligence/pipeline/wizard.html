@@ -785,7 +785,10 @@
   <div id="dashboard">
     <div id="dash-header">
       <h1>&#127978; Store Intelligence &mdash; Live Dashboard</h1>
-      <div id="store-badge" style="font-size:.8rem;color:var(--muted)"></div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <span id="ws-badge" style="font-size:.75rem;padding:4px 10px;border-radius:20px;background:rgba(34,197,94,.1);color:var(--green);border:1px solid rgba(34,197,94,.3)">🟡 Connecting…</span>
+        <div id="store-badge" style="font-size:.8rem;color:var(--muted)"></div>
+      </div>
     </div>
     <div class="metric-grid">
       <div class="metric-card">
@@ -1076,21 +1079,49 @@
       cameras.forEach(c => {
         const panel = document.createElement('div');
         panel.className = 'cam-panel';
-        panel.innerHTML = `<div class="cam-panel-lbl">${c.camera_id} <span class="cam-role-badge ${ROLE_BADGE[c.role]}" style="float:right">${ROLE_LABELS[c.role]}</span></div><img id="img-${c.camera_id}" src="" alt="${c.camera_id}">`;
+        panel.innerHTML = `<div class="cam-panel-lbl">${c.camera_id} <span class="cam-role-badge ${ROLE_BADGE[c.role]}" style="float:right">${ROLE_LABELS[c.role]}</span></div><img id="img-${c.camera_id}" src="" alt="${c.camera_id}" style="min-height:180px;background:#000">`;
         feeds.appendChild(panel);
       });
 
-      const wsf = new WebSocket('ws://' + location.host + '/ws/frames');
-      wsf.onmessage = e => {
-        const d = JSON.parse(e.data);
+      // ── Robust auto-reconnecting WebSocket factory ──
+      function makeWS(path, onMsg, label) {
+        let ws, retryDelay = 500, retryTimer = null;
+        function connect() {
+          if (ws) { try { ws.close(); } catch(_) {} }
+          ws = new WebSocket('ws://' + location.host + path);
+          ws.onopen = () => {
+            retryDelay = 500;
+            const badge = document.getElementById('ws-badge');
+            if (badge) badge.textContent = '🟢 Connected';
+          };
+          ws.onmessage = e => {
+            let d;
+            try { d = JSON.parse(e.data); } catch(_) { return; }
+            // Ignore control messages
+            if (d._type === 'ping' || d._type === 'connected') return;
+            onMsg(d);
+          };
+          ws.onclose = () => {
+            const badge = document.getElementById('ws-badge');
+            if (badge) badge.textContent = '🔴 Reconnecting…';
+            retryTimer = setTimeout(connect, Math.min(retryDelay, 8000));
+            retryDelay = Math.min(retryDelay * 2, 8000);
+          };
+          ws.onerror = () => { try { ws.close(); } catch(_) {} };
+        }
+        connect();
+        return { close: () => { clearTimeout(retryTimer); try { ws && ws.close(); } catch(_) {} } };
+      }
+
+      // Frames WS
+      makeWS('/ws/frames', d => {
         const img = document.getElementById('img-' + d.camera_id);
         if (img) img.src = 'data:image/jpeg;base64,' + d.frame;
-      };
+      }, 'frames');
 
-      const wse = new WebSocket('ws://' + location.host + '/ws/events');
+      // Events WS
       const evList = document.getElementById('event-list');
-      wse.onmessage = e => {
-        const ev = JSON.parse(e.data);
+      makeWS('/ws/events', ev => {
         if (ev._type === 'metrics') {
           document.getElementById('m-visitors').textContent = ev.active_visitors;
           document.getElementById('m-staff').textContent = ev.staff_count;
@@ -1105,7 +1136,33 @@
         div.innerHTML = `<span class="et ${et}">${et}</span> <span style="color:var(--muted)">${ts}</span> <span style="color:#60a5fa">${(ev.visitor_id || '').slice(-8)}</span>${ev.zone_id ? ' <span style="color:var(--amber)">' + ev.zone_id + '</span>' : ''}`;
         evList.insertBefore(div, evList.firstChild);
         while (evList.children.length > 200) evList.removeChild(evList.lastChild);
-      };
+      }, 'events');
+
+      // Poll for pipeline completion and show banner
+      const pollInterval = setInterval(async () => {
+        try {
+          const r = await fetch('/api/analysis/status');
+          if (!r.ok) return;
+          const s = await r.json();
+          if (s.done && !s.running) {
+            clearInterval(pollInterval);
+            showCompletionBanner(s.error);
+          }
+        } catch(_) {}
+      }, 2000);
+    }
+
+    function showCompletionBanner(err) {
+      let banner = document.getElementById('completion-banner');
+      if (banner) return; // already shown
+      banner = document.createElement('div');
+      banner.id = 'completion-banner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;background:' + (err ? 'rgba(239,68,68,.9)' : 'rgba(34,197,94,.9)') + ';color:#fff;font-weight:600;font-size:.9rem;';
+      banner.innerHTML = (err
+        ? `⚠️ Pipeline error: ${err}`
+        : `✅ Analysis complete! All cameras processed.`
+      ) + ` <button onclick="location.reload()" style="background:#fff;color:#000;border:none;border-radius:6px;padding:6px 16px;cursor:pointer;font-weight:600">Run Again</button>`;
+      document.body.prepend(banner);
     }
 
     // Init

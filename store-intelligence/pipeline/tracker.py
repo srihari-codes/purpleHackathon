@@ -50,30 +50,51 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Camera adjacency map (store geometry)
+# Camera adjacency map (store geometry) — populated at runtime by the wizard.
+# Call set_adjacency_map(role_adjacency, camera_file_map) after session load.
 # ---------------------------------------------------------------------------
-CAMERA_ADJACENCY: Dict[str, Set[str]] = {
-    "CAM_FLOOR_01":   {"CAM_FLOOR_02", "CAM_ENTRY_03"},
-    "CAM_FLOOR_02":   {"CAM_FLOOR_01", "CAM_BILLING_05"},
-    "CAM_ENTRY_03":   {"CAM_FLOOR_01"},
-    "CAM_GODOWN_04":  {"CAM_FLOOR_02"},
-    "CAM_BILLING_05": {"CAM_FLOOR_02"},
-}
+# Format: {camera_id: set_of_adjacent_camera_ids}
+CAMERA_ADJACENCY: Dict[str, Set[str]] = {}
 
 # Expected transit time (seconds) between adjacent camera pairs.
 # Used to compute the camera_handoff_bonus.
-HANDOFF_TRANSIT_SEC: Dict[Tuple[str, str], float] = {
-    ("CAM_ENTRY_03",   "CAM_FLOOR_01"): 3.0,
-    ("CAM_FLOOR_01",   "CAM_ENTRY_03"): 3.0,
-    ("CAM_FLOOR_01",   "CAM_FLOOR_02"): 4.0,
-    ("CAM_FLOOR_02",   "CAM_FLOOR_01"): 4.0,
-    ("CAM_FLOOR_02",   "CAM_BILLING_05"): 3.0,
-    ("CAM_BILLING_05", "CAM_FLOOR_02"): 3.0,
-    ("CAM_FLOOR_02",   "CAM_GODOWN_04"): 5.0,
-    ("CAM_GODOWN_04",  "CAM_FLOOR_02"): 5.0,
-}
+# Format: {(cam_from, cam_to): transit_sec}
+HANDOFF_TRANSIT_SEC: Dict[Tuple[str, str], float] = {}
+
 # Max deviation from expected transit time to award the bonus (seconds)
 HANDOFF_TIMING_TOLERANCE_SEC: float = 4.0
+
+
+def set_adjacency_map(
+    adjacency: Dict[str, Set[str]],
+    transit_sec: Optional[Dict[Tuple[str, str], float]] = None,
+) -> None:
+    """
+    Populate the module-level camera adjacency and transit maps.
+
+    Called from run_pipeline() once the wizard session is loaded.
+
+    adjacency   : {camera_id: {neighbour_camera_id, ...}}
+    transit_sec : {(cam_from, cam_to): seconds} — if None, defaults to 4.0 for all pairs
+    """
+    global CAMERA_ADJACENCY, HANDOFF_TRANSIT_SEC
+    CAMERA_ADJACENCY = {k: set(v) for k, v in adjacency.items()}
+
+    if transit_sec:
+        HANDOFF_TRANSIT_SEC = dict(transit_sec)
+    else:
+        # Default: 4 s for every declared adjacent pair (symmetric)
+        HANDOFF_TRANSIT_SEC = {}
+        for cam, neighbours in CAMERA_ADJACENCY.items():
+            for nb in neighbours:
+                for pair in [(cam, nb), (nb, cam)]:
+                    HANDOFF_TRANSIT_SEC.setdefault(pair, 4.0)
+
+    logger.info(
+        "tracker: adjacency loaded — %d cameras, %d pairs",
+        len(CAMERA_ADJACENCY),
+        len(HANDOFF_TRANSIT_SEC),
+    )
 
 
 # ---------------------------------------------------------------------------

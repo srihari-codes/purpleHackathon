@@ -5,14 +5,14 @@ Not all cameras are equally trustworthy. Cameras in occluded areas produce
 noisier detections; entry cameras are highly reliable. This module provides
 per-camera confidence modifiers that flow into the confidence pipeline.
 
-Static priors are defined in config.py (CAMERA_REPUTATION_PRIORS).
+Static priors are defined in config.py (CAMERA_REPUTATION_PRIORS_BY_ROLE).
 Dynamic adjustments learn from observed detection quality over time.
 
-Camera specializations:
-  CAM_ENTRY_03   — "entry"   high reliability for entry/exit events
-  CAM_BILLING_05 — "billing" high reliability for queue events
-  CAM_FLOOR_01/02— "floor"   moderate reliability, moderate occlusion
-  CAM_GODOWN_04  — "staff"   high occlusion, low customer visibility
+Camera specializations are determined by the role assigned in the wizard:
+  "entry"   — high reliability for entry/exit events
+  "billing" — high reliability for queue events
+  "floor"   — moderate reliability, moderate occlusion
+  "godown"  — high occlusion, low customer visibility
 """
 
 import logging
@@ -96,6 +96,26 @@ class CameraReputationProfile:
 
 
 # ---------------------------------------------------------------------------
+# Role inference helper
+# ---------------------------------------------------------------------------
+
+def _role_from_camera_id(camera_id: str) -> str:
+    """
+    Infer role from camera ID using naming conventions.
+    e.g. CAM_ENTRY_03 → entry, CAM_BILLING_05 → billing
+    Falls back to 'floor' for unknown patterns.
+    """
+    cam_upper = camera_id.upper()
+    if "ENTRY" in cam_upper:
+        return "entry"
+    if "BILLING" in cam_upper:
+        return "billing"
+    if "GODOWN" in cam_upper or "STAFF" in cam_upper:
+        return "godown"
+    return "floor"
+
+
+# ---------------------------------------------------------------------------
 # Camera Reputation Manager
 # ---------------------------------------------------------------------------
 class CameraReputation:
@@ -124,21 +144,44 @@ class CameraReputation:
             )
             profile.compute_modifier()
             self._profiles[cam_id] = profile
-            logger.debug(
-                f"Camera {cam_id}: reliability={profile.detection_reliability:.2f} "
-                f"occlusion={profile.occlusion_risk:.2f} "
-                f"modifier={profile._confidence_modifier:.3f} "
-                f"spec={profile.specialization}"
+
+    def seed_from_role_map(self, role_map: dict) -> None:
+        """
+        Seed reputation priors from a wizard-supplied role map.
+
+        role_map format: {camera_id: role}  e.g. {"CAM_ENTRY_03": "entry"}
+        Called once at pipeline startup after the wizard session is loaded.
+        """
+        role_priors = cfg.CAMERA_REPUTATION_PRIORS_BY_ROLE
+        for cam_id, role in role_map.items():
+            priors = role_priors.get(role, role_priors.get("floor", {}))
+            profile = CameraReputationProfile(
+                camera_id             = cam_id,
+                occlusion_risk        = priors.get("occlusion_risk", 0.30),
+                detection_reliability = priors.get("reliability", 0.80),
+                specialization        = priors.get("spec", "floor"),
+            )
+            profile.compute_modifier()
+            self._profiles[cam_id] = profile
+            logger.info(
+                f"CameraReputation seeded: {cam_id} role={role} "
+                f"reliability={profile.detection_reliability:.2f} "
+                f"modifier={profile._confidence_modifier:.3f}"
             )
 
     def _get(self, camera_id: str) -> CameraReputationProfile:
-        """Get or create profile for a camera."""
+        """Get or create profile for a camera, using role-based priors where available."""
         if camera_id not in self._profiles:
+            # Try to infer role from camera_id suffix (e.g. "CAM_ENTRY_03" -> "entry")
+            role = _role_from_camera_id(camera_id)
+            priors = cfg.CAMERA_REPUTATION_PRIORS_BY_ROLE.get(
+                role, cfg.CAMERA_REPUTATION_PRIORS_BY_ROLE.get("floor", {})
+            )
             self._profiles[camera_id] = CameraReputationProfile(
                 camera_id=camera_id,
-                occlusion_risk=0.30,
-                detection_reliability=0.80,
-                specialization="floor",
+                occlusion_risk=priors.get("occlusion_risk", 0.30),
+                detection_reliability=priors.get("reliability", 0.80),
+                specialization=priors.get("spec", "floor"),
             )
             self._profiles[camera_id].compute_modifier()
         return self._profiles[camera_id]
