@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Store Intelligence — Setup</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
+
+    body {
+      background: #09090b;
+      color: #e4e4e7;
+      font-family: Inter, sans-serif;
+      min-height: 100vh
+    }
+
+    :root {
+      --purple: #a855f7;
+      --purple-dark: #7c3aed;
+      --purple-light: #c084fc;
+      --surface: #18181b;
+      --border: #27272a;
+      --muted: #71717a;
+      --green: #22c55e;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --blue: #3b82f6;
+    }
+
+    /* PROGRESS BAR */
+    #progress-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      padding: 28px 0 0;
+      position: relative;
+      z-index: 10
+    }
+
+    .step-node {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer
+    }
+
+    .step-circle {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: .8rem;
+      font-weight: 600;
+      color: var(--muted);
+      transition: all .3s
+    }
+
+    .step-circle.active {
+      border-color: var(--purple);
+      background: var(--purple);
+      color: #fff;
+      box-shadow: 0 0 20px rgba(168, 85, 247, .4)
+    }
+
+    .step-circle.done {
+      border-color: var(--green);
+      background: var(--green);
+      color: #fff
+    }
+
+    .step-label {
+      font-size: .68rem;
+      color: var(--muted);
+      font-weight: 500;
+      white-space: nowrap
+    }
+
+    .step-label.active {
+      color: var(--purple-light)
+    }
+
+    .step-connector {
+      width: 80px;
+      height: 2px;
+      background: var(--border);
+      margin-bottom: 22px;
+      transition: background .3s
+    }
+
+    .step-connector.done {
+      background: var(--purple)
+    }
+
+    /* WRAPPER */
+    #wizard {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 32px 20px
+    }
+
+    .step {
+      display: none;
+      animation: fadeIn .35s ease
+    }
+
+    .step.active {
+      display: block
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(12px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    /* CARDS */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      margin-bottom: 20px
+    }
+
+    .card-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      background: linear-gradient(135deg, #e4e4e7, var(--purple-light));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent
+    }
+
+    .card-sub {
+      color: var(--muted);
+      font-size: .875rem;
+      margin-bottom: 28px
+    }
+
+    /* FORM */
+    .field {
+      margin-bottom: 20px
+    }
+
+    .field label {
+      display: block;
+      font-size: .8rem;
+      font-weight: 500;
+      color: #a1a1aa;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: .05em
+    }
+
+    .field input,
+    .field select {
+      width: 100%;
+      background: #09090b;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      color: #e4e4e7;
+      font-size: .95rem;
+      font-family: Inter, sans-serif;
+      transition: border-color .2s, box-shadow .2s;
+      outline: none
+    }
+
+    .field input:focus,
+    .field select:focus {
+      border-color: var(--purple);
+      box-shadow: 0 0 0 3px rgba(168, 85, 247, .15)
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px
+    }
+
+    /* BUTTONS */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: 10px;
+      font-size: .9rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all .2s
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--purple-dark), var(--purple));
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(168, 85, 247, .3)
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(168, 85, 247, .4)
+    }
+
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted)
+    }
+
+    .btn-ghost:hover {
+      border-color: var(--purple);
+      color: var(--purple)
+    }
+
+    .btn-danger {
+      background: transparent;
+      border: 1px solid var(--red);
+      color: var(--red)
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, .1)
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+      margin-top: 28px
+    }
+
+    /* ROLE PILLS */
+    .role-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 24px
+    }
+
+    .role-pill {
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      cursor: pointer;
+      transition: all .2s;
+      text-align: center
+    }
+
+    .role-pill:hover {
+      border-color: var(--purple);
+      background: rgba(168, 85, 247, .05)
+    }
+
+    .role-pill.selected {
+      border-color: var(--purple);
+      background: rgba(168, 85, 247, .1)
+    }
+
+    .role-pill .role-icon {
+      font-size: 1.6rem;
+      margin-bottom: 6px
+    }
+
+    .role-pill .role-name {
+      font-size: .85rem;
+      font-weight: 600
+    }
+
+    .role-pill .role-desc {
+      font-size: .72rem;
+      color: var(--muted);
+      margin-top: 3px
+    }
+
+    /* CAMERA CARDS */
+    .cam-cards {
+      display: flex;
+      flex-direction: column;
+      gap: 12px
+    }
+
+    .cam-card {
+      background: #09090b;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      transition: border-color .2s
+    }
+
+    .cam-card.uploaded {
+      border-color: rgba(34, 197, 94, .3)
+    }
+
+    .cam-role-badge {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: .7rem;
+      font-weight: 600;
+      white-space: nowrap
+    }
+
+    .badge-entry {
+      background: rgba(59, 130, 246, .15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, .3)
+    }
+
+    .badge-billing {
+      background: rgba(245, 158, 11, .15);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, .3)
+    }
+
+    .badge-floor {
+      background: rgba(168, 85, 247, .15);
+      color: #c084fc;
+      border: 1px solid rgba(168, 85, 247, .3)
+    }
+
+    .badge-godown {
+      background: rgba(113, 113, 122, .15);
+      color: #a1a1aa;
+      border: 1px solid rgba(113, 113, 122, .3)
+    }
+
+    .cam-info {
+      flex: 1
+    }
+
+    .cam-id {
+      font-size: .9rem;
+      font-weight: 600
+    }
+
+    .cam-file {
+      font-size: .75rem;
+      color: var(--muted);
+      margin-top: 2px
+    }
+
+    .cam-thumb {
+      width: 80px;
+      height: 48px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border)
+    }
+
+    .upload-zone {
+      flex: 1;
+      border: 1.5px dashed var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+      cursor: pointer;
+      font-size: .78rem;
+      color: var(--muted);
+      transition: all .2s
+    }
+
+    .upload-zone:hover,
+    .upload-zone.drag {
+      border-color: var(--purple);
+      color: var(--purple);
+      background: rgba(168, 85, 247, .05)
+    }
+
+    .upload-zone input {
+      display: none
+    }
+
+    /* ADD CAMERA MODAL */
+    #modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, .7);
+      z-index: 100;
+      align-items: center;
+      justify-content: center
+    }
+
+    #modal-overlay.show {
+      display: flex
+    }
+
+    #modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      width: 440px;
+      max-width: 95vw
+    }
+
+    #modal h3 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 20px
+    }
+
+    /* ZONE STEP */
+    .zone-cam-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px;
+      background: #09090b;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-bottom: 10px
+    }
+
+    .zone-cam-row .cam-id {
+      flex: 1
+    }
+
+    .zone-status {
+      font-size: .75rem;
+      padding: 3px 10px;
+      border-radius: 20px
+    }
+
+    .zone-status.configured {
+      background: rgba(34, 197, 94, .1);
+      color: var(--green);
+      border: 1px solid rgba(34, 197, 94, .3)
+    }
+
+    .zone-status.pending {
+      background: rgba(245, 158, 11, .1);
+      color: var(--amber);
+      border: 1px solid rgba(245, 158, 11, .3)
+    }
+
+    /* DASHBOARD */
+    #dashboard {
+      display: none
+    }
+
+    #dash-header {
+      padding: 16px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between
+    }
+
+    #dash-header h1 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--purple-light)
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      padding: 16px
+    }
+
+    .metric-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center
+    }
+
+    .metric-val {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--purple-light);
+      line-height: 1
+    }
+
+    .metric-lbl {
+      font-size: .72rem;
+      color: var(--muted);
+      margin-top: 6px;
+      text-transform: uppercase;
+      letter-spacing: .05em
+    }
+
+    #dash-body {
+      display: flex;
+      gap: 12px;
+      padding: 0 16px 16px
+    }
+
+    #cam-feeds {
+      flex: 1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px
+    }
+
+    .cam-panel {
+      flex: 1 1 300px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden
+    }
+
+    .cam-panel-lbl {
+      padding: 6px 10px;
+      font-size: .72rem;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border)
+    }
+
+    .cam-panel img {
+      width: 100%;
+      display: block;
+      background: #000;
+      min-height: 180px
+    }
+
+    #event-panel {
+      width: 300px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      max-height: 420px
+    }
+
+    #event-panel h3 {
+      padding: 10px 14px;
+      font-size: .78rem;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border)
+    }
+
+    #event-list {
+      overflow-y: auto;
+      flex: 1;
+      padding: 4px 0
+    }
+
+    .ev {
+      padding: 5px 12px;
+      font-size: .7rem;
+      border-bottom: 1px solid #09090b;
+      font-family: monospace
+    }
+
+    .ev .et {
+      font-weight: 700
+    }
+
+    .ENTRY {
+      color: var(--green)
+    }
+
+    .EXIT {
+      color: var(--red)
+    }
+
+    .ZONE_ENTER {
+      color: #60a5fa
+    }
+
+    .ZONE_EXIT {
+      color: var(--amber)
+    }
+
+    .BILLING_QUEUE_JOIN {
+      color: #fbbf24
+    }
+
+    .BILLING_QUEUE_ABANDON {
+      color: var(--red)
+    }
+
+    /* MISC */
+    .text-muted {
+      color: var(--muted);
+      font-size: .85rem
+    }
+
+    .mt-4 {
+      margin-top: 16px
+    }
+
+    .pill-done {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(34, 197, 94, .1);
+      color: var(--green);
+      border: 1px solid rgba(34, 197, 94, .3);
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: .72rem;
+      font-weight: 600
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(168, 85, 247, .3);
+      border-top-color: var(--purple);
+      border-radius: 50%;
+      animation: spin .7s linear infinite
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg)
+      }
+    }
+
+    .pulse {
+      animation: pulse 2s ease infinite
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: .5
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- PROGRESS -->
+  <div id="progress-bar">
+    <div class="step-node" onclick="goStep(1)">
+      <div class="step-circle active" id="sc1">1</div>
+      <div class="step-label active" id="sl1">Store Setup</div>
+    </div>
+    <div class="step-connector" id="conn1"></div>
+    <div class="step-node" onclick="goStep(2)">
+      <div class="step-circle" id="sc2">2</div>
+      <div class="step-label" id="sl2">Cameras</div>
+    </div>
+    <div class="step-connector" id="conn2"></div>
+    <div class="step-node" onclick="goStep(3)">
+      <div class="step-circle" id="sc3">3</div>
+      <div class="step-label" id="sl3">Zones</div>
+    </div>
+    <div class="step-connector" id="conn3"></div>
+    <div class="step-node" onclick="goStep(4)">
+      <div class="step-circle" id="sc4">4</div>
+      <div class="step-label" id="sl4">Analyse</div>
+    </div>
+  </div>
+
+  <div id="wizard">
+
+    <!-- STEP 1: STORE SETUP -->
+    <div class="step active" id="step1">
+      <div class="card">
+        <div class="card-title">Store Setup</div>
+        <div class="card-sub">Tell us about the store you're analysing</div>
+        <div class="field">
+          <label>Store Name</label>
+          <input type="text" id="store-name" placeholder="e.g. Purplle Andheri West" oninput="autoCode()">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Store Code</label>
+            <input type="text" id="store-code" placeholder="e.g. MUM_1076">
+          </div>
+          <div class="field">
+            <label>Analysis Date</label>
+            <input type="date" id="analysis-date">
+          </div>
+        </div>
+        <div class="field">
+          <label>Store ID (auto-generated)</label>
+          <input type="text" id="store-id" placeholder="ST_MUM_1076" style="color:var(--muted)">
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="saveSetup()">Next: Add Cameras &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 2: CAMERAS -->
+    <div class="step" id="step2">
+      <div class="card">
+        <div class="card-title">Camera Setup</div>
+        <div class="card-sub">Add cameras by role. You can add multiple floor and godown cameras.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px">
+          <button class="btn btn-ghost" onclick="showAddModal('entry')">+ Entrance/Exit</button>
+          <button class="btn btn-ghost" onclick="showAddModal('billing')">+ Billing Counter</button>
+          <button class="btn btn-ghost" onclick="showAddModal('floor')">+ Sales Floor</button>
+          <button class="btn btn-ghost" onclick="showAddModal('godown')">+ Godown/Staff</button>
+        </div>
+        <div class="cam-cards" id="cam-cards">
+          <div class="text-muted" id="no-cams" style="display:block">No cameras added yet. Click a button above to add
+            one.</div>
+          <div id="cam-cards-list"></div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-ghost" onclick="goStep(1)">&larr; Back</button>
+          <button class="btn btn-primary" onclick="goStep(3)">Next: Configure Zones &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3: ZONES -->
+    <div class="step" id="step3">
+      <div class="card">
+        <div class="card-title">Zone Configuration</div>
+        <div class="card-sub">Use the calibration tool to draw zones on each camera. Opens in a new tab.</div>
+        <div id="zone-cam-list"></div>
+        <div style="margin-top:20px;padding:16px;background:#09090b;border:1px solid var(--border);border-radius:10px">
+          <div style="font-size:.8rem;font-weight:600;margin-bottom:8px;color:var(--amber)">&#9888; Zone Calibration
+            Tool</div>
+          <div class="text-muted">The zone editor runs on port 8081. Click "Configure Zones" for each camera, draw your
+            zone polygons, then come back here.</div>
+          <div class="mt-4">
+            <button class="btn btn-ghost" onclick="window.open('http://localhost:8081','_blank')">Open Zone Editor
+              &#8599;</button>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-ghost" onclick="goStep(2)">&larr; Back</button>
+          <button class="btn btn-ghost" onclick="goStep(4)">Skip Zones</button>
+          <button class="btn btn-primary" onclick="goStep(4)">Next: Start Analysis &rarr;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 4: ANALYSE -->
+    <div class="step" id="step4">
+      <div class="card">
+        <div class="card-title">Ready to Analyse</div>
+        <div class="card-sub">Review your setup and start the analysis pipeline.</div>
+        <div id="summary"
+          style="background:#09090b;border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px">
+        </div>
+        <div style="text-align:center;padding:20px 0">
+          <button class="btn btn-primary" id="start-btn" onclick="startAnalysis()"
+            style="font-size:1rem;padding:16px 40px">
+            &#9654; Start Analysis
+          </button>
+          <div id="start-status" class="text-muted mt-4" style="display:none"></div>
+        </div>
+        <div class="btn-row" style="justify-content:flex-start">
+          <button class="btn btn-ghost" onclick="goStep(3)">&larr; Back</button>
+        </div>
+      </div>
+    </div>
+  </div><!-- /wizard -->
+
+  <!-- DASHBOARD (shown after pipeline starts) -->
+  <div id="dashboard">
+    <div id="dash-header">
+      <h1>&#127978; Store Intelligence &mdash; Live Dashboard</h1>
+      <div id="store-badge" style="font-size:.8rem;color:var(--muted)"></div>
+    </div>
+    <div class="metric-grid">
+      <div class="metric-card">
+        <div class="metric-val" id="m-visitors">0</div>
+        <div class="metric-lbl">Active Visitors</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val" id="m-staff">0</div>
+        <div class="metric-lbl">Staff</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val" id="m-queue">0</div>
+        <div class="metric-lbl">Queue Depth</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-val" id="m-events">0</div>
+        <div class="metric-lbl">Events</div>
+      </div>
+    </div>
+    <div id="dash-body">
+      <div id="cam-feeds"></div>
+      <div id="event-panel">
+        <h3>LIVE EVENT LOG</h3>
+        <div id="event-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD CAMERA MODAL -->
+  <div id="modal-overlay">
+    <div id="modal">
+      <h3 id="modal-title">Add Camera</h3>
+      <input type="hidden" id="modal-role">
+      <div class="field">
+        <label>Custom Label (optional)</label>
+        <input type="text" id="modal-label" placeholder="Leave blank for auto">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="addCamera()">Add Camera</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const ROLE_LABELS = { entry: 'Entrance/Exit', billing: 'Billing Counter', floor: 'Sales Floor', godown: 'Godown/Staff' };
+    const ROLE_BADGE = { entry: 'badge-entry', billing: 'badge-billing', floor: 'badge-floor', godown: 'badge-godown' };
+    let currentStep = 1;
+    let cameras = [];      // [{slot_id, role, camera_id, label, uploaded, filename}]
+    let camImgs = {};
+
+    // ── STEP NAV ──
+    function goStep(n) {
+      document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+      document.getElementById('step' + n)?.classList.add('active');
+      for (let i = 1; i <= 4; i++) {
+        const sc = document.getElementById('sc' + i);
+        const sl = document.getElementById('sl' + i);
+        sc.classList.remove('active', 'done');
+        sl.classList.remove('active');
+        if (i < n) { sc.classList.add('done'); sc.textContent = '✓'; }
+        else if (i === n) { sc.classList.add('active'); sc.textContent = i; sl.classList.add('active'); }
+        else { sc.textContent = i; }
+        if (i < 4) {
+          const c = document.getElementById('conn' + i);
+          c.classList.toggle('done', i < n);
+        }
+      }
+      currentStep = n;
+      if (n === 3) renderZoneStep();
+      if (n === 4) renderSummary();
+    }
+
+    // ── STEP 1 ──
+    function autoCode() {
+      const name = document.getElementById('store-name').value;
+      const code = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 15);
+      document.getElementById('store-code').value = code;
+      document.getElementById('store-id').value = 'ST_' + code;
+    }
+
+    async function saveSetup() {
+      const name = document.getElementById('store-name').value.trim();
+      if (!name) { alert('Please enter a store name'); return; }
+      const body = {
+        store_name: name,
+        store_code: document.getElementById('store-code').value.trim(),
+        store_id: document.getElementById('store-id').value.trim(),
+        analysis_date: document.getElementById('analysis-date').value,
+      };
+      try {
+        const res = await fetch('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!res.ok) throw new Error(`HTTP status ${res.status}`);
+      } catch (e) {
+        alert("Setup failed: " + e.message);
+        return;
+      }
+      document.getElementById('analysis-date').value ||
+        (document.getElementById('analysis-date').value = new Date().toISOString().slice(0, 10));
+      goStep(2);
+    }
+
+    // ── STEP 2: CAMERAS ──
+    function showAddModal(role) {
+      document.getElementById('modal-role').value = role;
+      document.getElementById('modal-title').textContent = 'Add ' + ROLE_LABELS[role] + ' Camera';
+      document.getElementById('modal-label').value = '';
+      document.getElementById('modal-overlay').classList.add('show');
+    }
+    function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
+
+    async function addCamera() {
+      const role = document.getElementById('modal-role').value;
+      const label = document.getElementById('modal-label').value;
+      closeModal();
+      try {
+        const res = await fetch('/api/camera/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role, label }) });
+        if (!res.ok) throw new Error(`HTTP status ${res.status}`);
+        const data = await res.json();
+        const slot = data.slot;
+        cameras.push(slot);
+      } catch (e) {
+        alert("Failed to add camera: " + e.message);
+      } finally {
+        renderCameraCards();
+      }
+    }
+
+    async function removeCamera(slot_id) {
+      try {
+        const res = await fetch('/api/camera/' + slot_id, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`HTTP status ${res.status}`);
+        cameras = cameras.filter(c => c.slot_id !== slot_id);
+      } catch (e) {
+        alert("Failed to remove camera: " + e.message);
+      } finally {
+        renderCameraCards();
+      }
+    }
+
+    function renderCameraCards() {
+      const list = document.getElementById('cam-cards-list');
+      const noCams = document.getElementById('no-cams');
+      if (!cameras.length) {
+        list.innerHTML = '';
+        noCams.style.display = 'block';
+        return;
+      }
+      noCams.style.display = 'none';
+      list.innerHTML = cameras.map(c => {
+        const inputId = 'file-input-' + c.slot_id;
+        return `
+    <div class="cam-card ${c.uploaded ? 'uploaded' : ''}" id="card-${c.slot_id}">
+      <span class="cam-role-badge ${ROLE_BADGE[c.role]}">${ROLE_LABELS[c.role]}</span>
+      <div class="cam-info">
+        <div class="cam-id">${c.camera_id}</div>
+        <div class="cam-file">${c.uploaded ? '\u2713 ' + c.filename : 'No file uploaded'}</div>
+      </div>
+      ${c.uploaded
+            ? `<img id="thumb-${c.slot_id}" class="cam-thumb" src="" alt="thumb">`
+            : `<label class="upload-zone" for="${inputId}" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="dropFile(event,'${c.slot_id}')">
+             <input type="file" id="${inputId}" accept="video/*" style="display:none" onchange="uploadFile(this,'${c.slot_id}')">
+             <div>\u2191 Upload Video</div>
+             <div style="font-size:.65rem;margin-top:3px">or drag &amp; drop</div>
+           </label>`
+          }
+      <button class="btn btn-danger" style="padding:6px 12px;font-size:.75rem" onclick="removeCamera('${c.slot_id}')">\u2715</button>
+    </div>`;
+      }).join('');
+      // Load thumbnails for uploaded cameras
+      cameras.filter(c => c.uploaded).forEach(c => loadThumb(c.slot_id));
+    }
+
+    async function uploadFile(input, slot_id) {
+      const file = input.files[0];
+      if (!file) return;
+      const form = new FormData();
+      form.append('file', file);
+      // Show progress overlay on the label, not inside it (avoid destroying hidden input)
+      const label = input.parentElement;
+      if (label) {
+        label.style.opacity = '0.6';
+        label.style.pointerEvents = 'none';
+        const div = label.querySelector('div');
+        if (div) div.textContent = 'Uploading…';
+      }
+      try {
+        const res = await fetch('/api/camera/' + slot_id + '/upload', { method: 'POST', body: form });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Upload failed');
+        const cam = cameras.find(c => c.slot_id === slot_id);
+        if (cam) { cam.uploaded = true; cam.filename = file.name; }
+      } catch (e) {
+        alert('Upload failed: ' + e.message);
+      } finally {
+        renderCameraCards();
+      }
+    }
+
+    async function dropFile(e, slot_id) {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      const input = document.getElementById('file-input-' + slot_id);
+      if (input) {
+        const dt = new DataTransfer(); dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change'));
+      }
+    }
+
+    async function loadThumb(slot_id) {
+      const img = document.getElementById('thumb-' + slot_id);
+      if (!img) return;
+      try {
+        const res = await fetch('/api/camera/' + slot_id + '/frame');
+        if (!res.ok) throw new Error("Frame error");
+        const d = await res.json();
+        img.src = 'data:image/jpeg;base64,' + d.frame;
+      } catch (e) { }
+    }
+
+    // ── STEP 3: ZONES ──
+    function renderZoneStep() {
+      const container = document.getElementById('zone-cam-list');
+      if (!cameras.length) { container.innerHTML = '<div class="text-muted">No cameras configured.</div>'; return; }
+      container.innerHTML = cameras.map(c => `
+    <div class="zone-cam-row">
+      <span class="cam-role-badge ${ROLE_BADGE[c.role]}">${ROLE_LABELS[c.role]}</span>
+      <div class="cam-id">${c.camera_id}</div>
+      <span class="zone-status pending">Pending</span>
+      <button class="btn btn-ghost" style="padding:6px 14px;font-size:.78rem"
+        onclick="window.open('http://localhost:8081/?camera_id=${c.camera_id}','_blank');
+                 this.closest('.zone-cam-row').querySelector('.zone-status').className='zone-status configured';
+                 this.closest('.zone-cam-row').querySelector('.zone-status').textContent='Configured ✓'">
+        Configure Zones &#8599;
+      </button>
+    </div>
+  `).join('');
+    }
+
+    // ── STEP 4: SUMMARY + START ──
+    function renderSummary() {
+      const s = document.getElementById('summary');
+      const name = document.getElementById('store-name').value;
+      const code = document.getElementById('store-code').value;
+      const date = document.getElementById('analysis-date').value;
+      const camRows = cameras.map(c => `
+    <tr>
+      <td style="padding:4px 8px"><span class="cam-role-badge ${ROLE_BADGE[c.role]}" style="font-size:.68rem">${ROLE_LABELS[c.role]}</span></td>
+      <td style="padding:4px 8px;font-family:monospace;font-size:.8rem">${c.camera_id}</td>
+      <td style="padding:4px 8px;font-size:.78rem;color:var(--muted)">${c.filename || 'Not uploaded'}</td>
+      <td style="padding:4px 8px">${c.uploaded ? '<span class="pill-done">✓ Ready</span>' : '<span style="color:var(--amber);font-size:.75rem">⚠ Missing</span>'}</td>
+    </tr>`).join('');
+      s.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+      <div><div style="font-size:.7rem;color:var(--muted)">STORE</div><div style="font-weight:600">${name || '—'}</div></div>
+      <div><div style="font-size:.7rem;color:var(--muted)">CODE</div><div style="font-weight:600;font-family:monospace">${code || '—'}</div></div>
+      <div><div style="font-size:.7rem;color:var(--muted)">DATE</div><div style="font-weight:600">${date || '—'}</div></div>
+    </div>
+    <table style="width:100%;border-collapse:collapse"><tbody>${camRows}</tbody></table>`;
+    }
+
+    async function startAnalysis() {
+      const unloaded = cameras.filter(c => !c.uploaded);
+      if (!cameras.length) { alert('Add at least one camera'); return; }
+      const btn = document.getElementById('start-btn');
+      const stat = document.getElementById('start-status');
+      btn.innerHTML = '<span class="spinner"></span> Starting…';
+      btn.disabled = true;
+      stat.style.display = '';
+      stat.textContent = 'Initialising pipeline…';
+      const res = await fetch('/api/analysis/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ speed: 0 }) });
+      const d = await res.json();
+      if (!d.ok) { btn.innerHTML = '▶ Start Analysis'; btn.disabled = false; stat.textContent = 'Error: ' + d.error; return; }
+      // Switch to dashboard
+      document.getElementById('wizard').style.display = 'none';
+      document.getElementById('progress-bar').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+      document.getElementById('store-badge').textContent = d.store_id;
+      initDashboard();
+    }
+
+    // ── DASHBOARD ──
+    function initDashboard() {
+      // Build camera panels dynamically
+      const feeds = document.getElementById('cam-feeds');
+      cameras.forEach(c => {
+        const panel = document.createElement('div');
+        panel.className = 'cam-panel';
+        panel.innerHTML = `<div class="cam-panel-lbl">${c.camera_id} <span class="cam-role-badge ${ROLE_BADGE[c.role]}" style="float:right">${ROLE_LABELS[c.role]}</span></div><img id="img-${c.camera_id}" src="" alt="${c.camera_id}">`;
+        feeds.appendChild(panel);
+      });
+
+      const wsf = new WebSocket('ws://' + location.host + '/ws/frames');
+      wsf.onmessage = e => {
+        const d = JSON.parse(e.data);
+        const img = document.getElementById('img-' + d.camera_id);
+        if (img) img.src = 'data:image/jpeg;base64,' + d.frame;
+      };
+
+      const wse = new WebSocket('ws://' + location.host + '/ws/events');
+      const evList = document.getElementById('event-list');
+      wse.onmessage = e => {
+        const ev = JSON.parse(e.data);
+        if (ev._type === 'metrics') {
+          document.getElementById('m-visitors').textContent = ev.active_visitors;
+          document.getElementById('m-staff').textContent = ev.staff_count;
+          document.getElementById('m-queue').textContent = ev.queue_depth;
+          document.getElementById('m-events').textContent = ev.total_events;
+          return;
+        }
+        const div = document.createElement('div');
+        div.className = 'ev';
+        const ts = (ev.timestamp || '').slice(11, 19);
+        const et = ev.event_type || '';
+        div.innerHTML = `<span class="et ${et}">${et}</span> <span style="color:var(--muted)">${ts}</span> <span style="color:#60a5fa">${(ev.visitor_id || '').slice(-8)}</span>${ev.zone_id ? ' <span style="color:var(--amber)">' + ev.zone_id + '</span>' : ''}`;
+        evList.insertBefore(div, evList.firstChild);
+        while (evList.children.length > 200) evList.removeChild(evList.lastChild);
+      };
+    }
+
+    // Init
+    async function init() {
+      document.getElementById('analysis-date').value = new Date().toISOString().slice(0, 10);
+      try {
+        const res = await fetch('/api/session');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data) {
+          if (data.store_name) {
+            document.getElementById('store-name').value = data.store_name;
+            document.getElementById('store-code').value = data.store_code;
+            document.getElementById('store-id').value = data.store_id;
+            document.getElementById('analysis-date').value = data.analysis_date || new Date().toISOString().slice(0, 10);
+          }
+          if (data.cameras && data.cameras.length > 0) {
+            cameras = data.cameras;
+            renderCameraCards();
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load session:", e);
+      }
+    }
+    init();
+  </script>
+</body>
+
+</html>
